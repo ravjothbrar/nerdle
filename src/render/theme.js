@@ -26,6 +26,9 @@ export const THEMES = {
     obstacleEdge: '#3a3c2a',
     obstacleText: '#ffffff',
     hazard: '#f3c14b',
+    wallFront: '#2a0b20',
+    wallTop: '#6a2a52',
+    wallSide: '#1c0715',
     shadow: 'rgba(0,0,0,0.35)',
   },
   mathlete: {
@@ -51,6 +54,9 @@ export const THEMES = {
     obstacleEdge: '#c8447a',
     obstacleText: '#ffffff',
     hazard: '#ffcf5a',
+    wallFront: '#15151f',
+    wallTop: '#44445f',
+    wallSide: '#0a0a11',
     shadow: 'rgba(0,0,0,0.45)',
   },
 };

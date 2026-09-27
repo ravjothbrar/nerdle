@@ -53,12 +53,20 @@ try {
           last = now;
           const g = window.__rush;
           const p = g.player;
-          const gate = g.gates.filter((x) => !x.resolved).sort((a, b) => a.d - b.d)[0];
-          if (gate && gate.trueLane !== p.lane && g.t - gate.spawnedAt > 0.4) key(gate.trueLane < p.lane ? 'ArrowLeft' : 'ArrowRight');
-          const ob = g.obstacles.filter((x) => !x.resolved).sort((a, b) => a.d - b.d)[0];
-          if (ob && ob.d / g.speed < 0.2) {
-            if (ob.kind === 'barrier' && p.jumpT < 0) key('ArrowUp');
-            if (ob.kind === 'beam' && p.duckT < 0) key('ArrowDown');
+          const row = g.rows.filter((r) => !r.resolved).sort((a, b) => a.d - b.d)[0];
+          if (row) {
+            const score = (s) => (s.type === 'eq' ? (s.eq.isTrue ? 3 : -1) : s.type === 'empty' ? 2 : s.type === 'wall' ? -1 : 1);
+            let best = p.lane;
+            let bestKey = -1e9;
+            row.lanes.forEach((s, l) => {
+              const k = score(s) * 10 - Math.abs(l - p.lane);
+              if (score(s) >= 0 && k > bestKey) [bestKey, best] = [k, l];
+            });
+            if (best !== p.lane && g.t - row.spawnedAt > 0.4) key(best < p.lane ? 'ArrowLeft' : 'ArrowRight');
+            const mine = row.lanes[p.lane];
+            const eta = row.d / g.speed;
+            if (mine.type === 'barrier' && eta < 0.2 && p.jumpT < 0) key('ArrowUp');
+            if (mine.type === 'beam' && eta < 0.2 && p.duckT < 0) key('ArrowDown');
           }
           if (now < end) requestAnimationFrame(loop);
           else resolve();

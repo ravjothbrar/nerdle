@@ -41,7 +41,7 @@ export default function GameView({
   const [hint, setHint] = useState(mode === 'play');
 
   const [ready, setReady] = useState(false);
-  const [coach, setCoach] = useState(null); // 'barrier' | 'beam' while a first-time obstacle approaches
+  const [coach, setCoach] = useState(null); // 'barrier' | 'beam' | 'wall' | 'mixed' on first sighting
   const [lesson, setLesson] = useState(null); // tutorial coach message
   const attract = mode === 'attract';
   const tutorialMode = mode === 'tutorial';
@@ -174,6 +174,7 @@ export default function GameView({
             break;
           case 'bump':
             audio.bump();
+            if (e.wall) shake(5);
             break;
           case 'jump':
             audio.jump();
@@ -261,8 +262,8 @@ export default function GameView({
           lastHudKey = key;
           setHud({ score: g.score, coins: g.coins, multiplier: g.multiplier, streak: g.streak, shields: g.shields });
         }
-        const tut = g.status === 'running' && g.obstacles.find((o) => o.tutorial && !o.resolved && o.d < 50);
-        const nextCoach = tut ? tut.kind : null;
+        const first = g.status === 'running' && g.rows.find((r) => r.coach && !r.resolved && r.d < 70);
+        const nextCoach = first ? first.coach : null;
         if (nextCoach !== lastCoach) {
           lastCoach = nextCoach;
           setCoach(nextCoach);
@@ -283,7 +284,7 @@ export default function GameView({
       const lift = jumpHeight(p.jumpT) * view.ppu * 2.3;
       const y = view.groundY - w * 1.24 - lift + w * 0.02;
       const tilt = (p.laneVisual - p.lane) * -18;
-      const duck = p.duckT >= 0 ? 0.55 : 1;
+      const duck = p.duckT >= 0 ? 0.45 : 1;
       let extra = '';
       if (game.status !== 'running' && game.death?.cause === 'obstacle') {
         const k = Math.min(1, game.deathTimer * 3);

@@ -14,18 +14,27 @@
 //  - Resolution is capped by pixel budget, and GameView can lower it further
 //    at runtime (adaptive quality) if frames run long.
 
-import { SPAWN_D } from '../game/engine.js';
+import { SPAWN_D, WALL_LEN } from '../game/engine.js';
 import { displayToken } from '../game/equations.js';
-import { createView, scaleAt, groundYAt, laneXAt, project, CAM } from './projection.js';
+import { createView, scaleAt, groundYAt, laneXAt, project, layoutTokens, CAM, TILE_GAP } from './projection.js';
 
 const FONT = '"Nunito", "Quicksand", system-ui, sans-serif';
-const TILE_GAP = 0.12; // gap between tiles, as a fraction of tile size
-const SIGN_LIFT = 2.5; // world units between the ground and a sign's bottom edge
+// Heights in world units (a lane is 4 wide; the cube is ~2 tall).
+const PANEL_LIFT = 0.35; // equation panels stand on short legs
+const HURDLE_LIFT = 0.2;
+const HURDLE_TOP = 1.25;
+// Beams are a tall overhead gantry — big board up high, obvious open gap
+// underneath — but the bottom edge sits below the standing cube's head (~2),
+// above the ducking cube (~0.9): you must duck.
+const BEAM_BOTTOM = 1.6;
+const BEAM_TOP = 3.8;
+const BEAM_POST_TOP = 4.1;
+const WALL_H = 2.4; // taller than the cube (~2), low enough not to hide the row behind
 const ROW_LEN = 4.5; // world length of one row of track tiles
 const SEAM_FAR_D = 220; // seams further than this blend into the bed anyway
 const NEAR_D = -CAM * 0.85; // nearest depth drawn (just behind the camera plane)
 const MAX_PIXELS = 2.6e6; // per-canvas pixel budget before resolution is capped
-const MAX_SPRITES = 48; // ~a dozen are on screen at once
+const MAX_SPRITES = 60; // ~a dozen are on screen at once
 
 export function createRenderer(backCanvas, frontCanvas) {
   const backCtx = backCanvas?.getContext?.('2d', { alpha: false }) ?? null;
@@ -37,14 +46,24 @@ export function createRenderer(backCanvas, frontCanvas) {
   let size = { w: 800, h: 600 };
   let staticLayer = null; // { canvas, key }
   let sprites = new Map();
-  let frontDirty = true;
+  // Dirty-rect tracking for the front canvas: only the area painted last
+  // frame is cleared, instead of the whole layer every frame.
+  const FULL = { x0: -1e9, y0: -1e9, x1: 1e9, y1: 1e9 };
+  let lastBox = FULL;
+  let box = null; // bbox being accumulated while drawing the front layer
+  const mark = (x, y, w, h) => {
+    if (!box) return;
+    box.x0 = Math.min(box.x0, x);
+    box.y0 = Math.min(box.y0, y);
+    box.x1 = Math.max(box.x1, x + w);
+    box.y1 = Math.max(box.y1, y + h);
+  };
   // New sprites rasterised per frame. Gates spawn at the horizon almost
   // transparent, so deferring a sign by a frame is invisible, while
   // rasterising three at once can cause a long frame on a slow phone.
   const SPRITE_BUDGET = 1;
   let spriteBudget = SPRITE_BUDGET;
   const particles = [];
-  const flashes = new Map(); // gate id -> seconds since resolve
   let time = 0;
 
   function computeDpr() {
@@ -52,7 +71,7 @@ export function createRenderer(backCanvas, frontCanvas) {
     return Math.max(0.75, Math.min(deviceRatio, 2, budget) * quality);
   }
 
-  function resize(width, height, pixelRatio = 1) {
+  function resize(width, height, pixelRatio = 1, keepSprites = false) {
     size = { w: width, h: height };
     deviceRatio = pixelRatio;
     dpr = computeDpr();
@@ -65,8 +84,10 @@ export function createRenderer(backCanvas, frontCanvas) {
       c.style.height = `${height}px`;
     }
     staticLayer = null;
-    sprites = new Map();
-    frontDirty = true;
+    // Sprites are drawn scaled anyway, so a quality change can keep them
+    // (re-rasterising everything at once is exactly the spike we're avoiding).
+    if (!keepSprites) sprites = new Map();
+    lastBox = FULL;
     return view;
   }
 
@@ -75,25 +96,25 @@ export function createRenderer(backCanvas, frontCanvas) {
     const next = Math.max(0.5, Math.min(1, q));
     if (Math.abs(next - quality) < 0.01) return;
     quality = next;
-    resize(size.w, size.h, deviceRatio);
+    resize(size.w, size.h, deviceRatio, true);
   }
 
-  /** React to engine events with particles / flashes. */
+  /** React to engine events with particles. */
   function onEvents(g, events, theme) {
+    const v = view;
+    const midY = v.groundY - v.ppu * 1.3; // roughly the middle of a panel at the runner
     for (const e of events) {
       if (e.type === 'coin') {
-        flashes.set(e.gateId, 0);
-        // Everything celebratory happens down at the runner's level, below
-        // the band where the next equations are being read.
-        const mx = laneXAt(view, e.lane, 0);
-        const my = view.groundY - view.ppu * 1.1;
-        burst(mx, my, theme.correct, 14, 0.55);
-        particles.push({ kind: 'coin', x0: mx, y0: my, life: 0, max: 0.55 });
+        // The panel shatters into its tiles and a coin flies to the HUD.
+        const mx = laneXAt(v, e.lane, 0);
+        burst(mx, midY, theme.correct, 16, 0.6);
+        burst(mx, midY, '#ffffff', 8, 0.5);
+        particles.push({ kind: 'coin', x0: mx, y0: midY, life: 0, max: 0.55 });
         particles.push({
           kind: 'text',
           text: `+${e.points}`,
-          x: mx + view.laneW * 0.32,
-          y: view.groundY - view.ppu * 1.6,
+          x: mx + v.laneW * 0.34,
+          y: v.groundY - v.ppu * 2.2,
           vx: 0,
           vy: -45,
           life: 0,
@@ -101,11 +122,11 @@ export function createRenderer(backCanvas, frontCanvas) {
           color: '#ffffff',
         });
       } else if (e.type === 'shield') {
-        burst(laneXAt(view, g.player.lane, 0), view.groundY - view.ppu * 1.2, '#8fd3ff', 24);
-      } else if (e.type === 'death' && e.cause === 'equation') {
-        burst(laneXAt(view, e.lane, 0), view.groundY - view.ppu * 3.2, theme.wrong, 32);
+        burst(laneXAt(v, e.lane ?? g.player.lane, 0), midY, '#8fd3ff', 24);
+      } else if (e.type === 'death') {
+        burst(laneXAt(v, e.lane ?? g.player.lane, 0), midY, e.cause === 'equation' ? theme.wrong : '#ffffff', 32);
       } else if (e.type === 'cleared') {
-        burst(laneXAt(view, g.player.lane, 0), view.groundY - view.ppu * 0.4, '#ffffff', 8);
+        burst(laneXAt(v, g.player.lane, 0), v.groundY - v.ppu * 0.4, '#ffffff', 8);
       }
     }
   }
@@ -132,10 +153,6 @@ export function createRenderer(backCanvas, frontCanvas) {
   function draw(g, theme, dt, { worldOffset = g.distance * 2 } = {}) {
     time += dt;
     spriteBudget = SPRITE_BUDGET;
-    for (const [id, t] of flashes) {
-      if (t > 2) flashes.delete(id);
-      else flashes.set(id, t + dt);
-    }
     if (backCtx) {
       // Static layer, blitted 1:1 in device pixels.
       backCtx.setTransform(1, 0, 0, 1, 0, 0);
@@ -144,18 +161,24 @@ export function createRenderer(backCanvas, frontCanvas) {
       drawSeams(backCtx, theme, worldOffset);
       if (g.speedLevel > 0) drawSpeedStreaks(backCtx, g.speedLevel);
       drawShadow(backCtx, g, theme);
-      drawEntities(backCtx, g, theme, (d) => d >= 0);
+      drawRows(backCtx, g, theme, 'back');
     }
     if (frontCtx) {
-      const needed = particles.length > 0 || g.gates.some((x) => x.d < 0) || g.obstacles.some((x) => x.d < 0);
-      if (needed || frontDirty) {
-        frontCtx.setTransform(1, 0, 0, 1, 0, 0);
-        frontCtx.clearRect(0, 0, frontCanvas.width, frontCanvas.height);
+      const needed = particles.length > 0 || g.rows.some((r) => r.d < 0);
+      if (needed || lastBox) {
         frontCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        drawEntities(frontCtx, g, theme, (d) => d < 0);
+        if (lastBox) {
+          const b = lastBox;
+          const x0 = Math.max(0, b.x0 - 4);
+          const y0 = Math.max(0, b.y0 - 4);
+          frontCtx.clearRect(x0, y0, Math.min(view.width, b.x1 + 4) - x0, Math.min(view.height, b.y1 + 4) - y0);
+        }
+        box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+        drawRows(frontCtx, g, theme, 'front');
         drawParticles(frontCtx, dt);
+        lastBox = box.x1 > box.x0 ? box : null;
+        box = null;
       }
-      frontDirty = needed;
     }
   }
 
@@ -275,16 +298,17 @@ export function createRenderer(backCanvas, frontCanvas) {
     ctx.lineWidth = 2;
     ctx.beginPath();
     for (let i = 0; i < n; i++) {
-      // Deterministic per-streak angle (upper-side fan, avoiding the track).
+      // Deterministic per-streak angle: a fan down the sides of the screen,
+      // leaving the middle (where the maths is) clear.
       const side = i % 2 ? 1 : -1;
-      const ang = side * (0.35 + ((i * 0.618) % 1) * 1.1) - Math.PI / 2;
+      const ang = Math.PI / 2 - side * (0.75 + ((i * 0.618) % 1) * 0.75);
       const k = (time * (1.4 + (i % 3) * 0.3) + i * 0.37) % 1;
       const r0 = reach * (0.12 + k * 0.6);
       const r1 = r0 + reach * (0.05 + k * 0.12);
       const dx = Math.cos(ang);
       const dy = Math.sin(ang);
-      ctx.moveTo(v.cx + dx * r0, v.horizonY + dy * r0 * 0.6);
-      ctx.lineTo(v.cx + dx * r1, v.horizonY + dy * r1 * 0.6);
+      ctx.moveTo(v.cx + dx * r0, v.horizonY + dy * r0);
+      ctx.lineTo(v.cx + dx * r1, v.horizonY + dy * r1);
     }
     ctx.stroke();
   }
@@ -300,116 +324,134 @@ export function createRenderer(backCanvas, frontCanvas) {
     ctx.fill();
   }
 
-  // ---------------------------------------------------------------- entities
+  // ---------------------------------------------------------------- rows
 
-  function drawEntities(ctx, g, theme, filter) {
-    const items = [];
-    for (const x of g.gates) if (filter(x.d)) items.push({ d: x.d, gate: x });
-    for (const x of g.obstacles) if (filter(x.d)) items.push({ d: x.d, ob: x });
-    items.sort((a, b) => b.d - a.d);
-    for (const it of items) {
-      if (it.gate) drawGate(ctx, g, it.gate, theme);
-      else drawObstacle(ctx, it.ob, theme);
+  /**
+   * Draw every row slot that belongs on this canvas, far to near. The back
+   * canvas (under the mascot) gets everything still ahead, plus hurdles that
+   * are passing under your feet and the row that just ended the run (so the
+   * cube is seen bouncing off it). Everything else that has passed you goes
+   * on the front canvas.
+   */
+  function drawRows(ctx, g, theme, layer) {
+    const deathRow = g.status !== 'running' ? g.death?.rowId : null;
+    const rows = g.rows.slice().sort((a, b) => b.d - a.d);
+    let drew = false;
+    for (const row of rows) {
+      const cols = rowCols(row);
+      const alpha = rowAlpha(row);
+      if (alpha <= 0) continue;
+      // Outer lanes first so a centre wall's faces sit on top of neighbours.
+      for (const lane of [0, 2, 1]) {
+        const s = row.lanes[lane];
+        const back = row.d >= 0 || row.id === deathRow || s.type === 'barrier';
+        if ((layer === 'back') !== back) continue;
+        drew = true;
+        ctx.globalAlpha = s.type === 'wall' ? wallAlpha(row) : alpha;
+        switch (s.type) {
+          case 'eq':
+            drawPanel(ctx, g, row, lane, s, cols, theme, deathRow);
+            break;
+          case 'wall':
+            drawWall(ctx, row.d, lane, s, theme, row.result === 'hit' && row.chosen === lane);
+            break;
+          case 'barrier':
+            drawHurdle(ctx, row.d, lane, theme, row.result === 'hit' && row.chosen === lane);
+            break;
+          case 'beam':
+            drawBeam(ctx, row.d, lane, theme, row.result === 'hit' && row.chosen === lane);
+            break;
+          default:
+        }
+      }
     }
     ctx.globalAlpha = 1;
+    return drew;
   }
 
-  function entityAlpha(d) {
-    // Fade in from the horizon, and out as things sweep past the camera.
-    const fadeIn = Math.min(1, (SPAWN_D - d) / 8 + 0.15);
-    const fadeOut = d < 0 ? Math.max(0, 1 + d / 7) : 1;
+  function rowAlpha(row) {
+    // Fade in from the horizon; clear out fast once past the runner.
+    const fadeIn = Math.min(1, (SPAWN_D - row.d) / 10 + 0.15);
+    const fadeOut = row.d < 0 ? Math.max(0, 1 + row.d / 2) : 1;
     return Math.max(0, Math.min(fadeIn, fadeOut));
   }
 
-  function drawGate(ctx, g, gate, theme) {
+  function wallAlpha(row) {
+    const fadeIn = Math.min(1, (SPAWN_D - row.d) / 10 + 0.15);
+    const back = row.d + WALL_LEN;
+    return Math.max(0, Math.min(fadeIn, back < 2 ? back / 2 : 1));
+  }
+
+  /** One tile size per row, so all equations in a row look the same. */
+  function rowCols(row) {
+    if (row._colsFor === view.signLayout) return row._cols;
+    let cols = 1;
+    for (const s of row.lanes) {
+      if (s.type !== 'eq') continue;
+      for (const r of layoutTokens(s.eq.tokens, view.signLayout)) cols = Math.max(cols, r.length);
+    }
+    // A fixed minimum keeps tile size (and so panel height) uniform from row
+    // to row: short equations don't get giant tiles whose tall panels would
+    // hide the row behind. Memoised on the row object (render-side only).
+    const minCols = { row: 8, two: 5, column: 3 }[view.signLayout];
+    row._cols = Math.max(cols, minCols);
+    row._colsFor = view.signLayout;
+    return row._cols;
+  }
+
+  // -- equation panels -------------------------------------------------------
+
+  function drawPanel(ctx, g, row, lane, s, cols, theme, deathRow) {
+    // A true panel you ran through has shattered into coins.
+    if (row.result === 'correct' && row.chosen === lane) return;
     const v = view;
-    const s = scaleAt(gate.d);
-    // Passed signs clear out fast so they never cover the next equations.
-    const alpha = gate.d < 0 ? Math.max(0, 1 + gate.d / 3.5) : entityAlpha(gate.d);
-    if (alpha <= 0) return;
+    const sc = scaleAt(row.d);
+    const dying = row.id === deathRow;
+    let state = 'idle';
+    if (dying) state = s.eq.isTrue ? 'correct' : lane === row.chosen ? 'wrong' : 'idle';
+    const sprite = panelSprite(s.eq.text, state, v.tileFor(cols), theme, row.d < SPAWN_D - 14);
+    if (!sprite) return;
 
-    const dying = g.status !== 'running' && g.death?.gateId === gate.id;
-    const flashT = flashes.get(gate.id);
-    // Once past the runner, signs swoosh up and away overhead instead of
-    // sinking across the runner (they sit below the camera's eye line).
-    const lift = gate.d < 0 ? -gate.d * Math.max(v.ppu * 1.4, v.height * 0.035) : 0;
-
-    // Posts between lanes.
-    ctx.globalAlpha = alpha;
-    const postTop = project(v, 0, SIGN_LIFT + signHeightUnits(), gate.d).y - lift;
-    const gy = groundYAt(v, gate.d) - lift;
+    const cx = laneXAt(v, lane, row.d);
+    const gy = groundYAt(v, row.d);
+    const bottom = gy - PANEL_LIFT * v.ppu * sc;
+    // Little legs.
     ctx.fillStyle = theme.post;
-    const pw = Math.max(2, 0.18 * v.ppu * s);
-    for (const edge of [-0.5, 0.5, 1.5, 2.5]) {
-      ctx.fillRect(laneXAt(v, edge, gate.d) - pw / 2, postTop, pw, gy - postTop);
-    }
+    const legW = Math.max(2, 0.16 * v.ppu * sc);
+    const legX = sprite.w * 0.3 * sc;
+    ctx.fillRect(cx - legX - legW / 2, bottom - 2, legW, gy - bottom + 2);
+    ctx.fillRect(cx + legX - legW / 2, bottom - 2, legW, gy - bottom + 2);
 
-    const tile = signTileSize(signCols(gate));
-    for (let lane = 0; lane < 3; lane++) {
-      const eq = gate.lanes[lane];
-      let state = 'idle';
-      if (gate.result === 'correct' && lane === gate.chosen) state = 'correct';
-      if (dying) state = eq.isTrue ? 'correct' : lane === gate.chosen ? 'wrong' : 'idle';
-      const sprite = signSprite(eq.text, state, tile, theme, gate.d < SPAWN_D - 12);
-      if (!sprite) continue; // deferred to a later frame (still far away)
-      let shake = 0;
-      if (dying && state === 'wrong') shake = Math.sin(time * 60) * 4 * Math.max(0, 1 - g.deathTimer * 1.5);
-      let pop = 1;
-      if (state === 'correct' && flashT != null) pop = 1 + 0.12 * Math.max(0, 1 - flashT * 4);
-      const sc = s * pop;
-      const cx = laneXAt(v, lane, gate.d) + shake;
-      const bottom = project(v, lane, SIGN_LIFT, gate.d).y - lift;
-      ctx.globalAlpha = dying && state === 'idle' ? alpha * 0.45 : alpha;
-      ctx.drawImage(
-        sprite.canvas,
-        cx - (sprite.w / 2 + sprite.pad) * sc,
-        bottom - (sprite.h + sprite.pad) * sc,
-        (sprite.w + sprite.pad * 2) * sc,
-        (sprite.h + sprite.pad * 2) * sc,
-      );
-    }
+    let shake = 0;
+    if (dying && state === 'wrong') shake = Math.sin(time * 60) * 5 * Math.max(0, 1 - g.deathTimer * 1.5);
+    if (dying && state === 'idle') ctx.globalAlpha *= 0.4;
+    const dx = cx + shake - (sprite.w / 2 + sprite.pad) * sc;
+    const dy = bottom - (sprite.h + sprite.pad) * sc;
+    const dw = (sprite.w + sprite.pad * 2) * sc;
+    ctx.drawImage(sprite.canvas, dx, dy, dw, (sprite.h + sprite.pad * 2) * sc);
+    mark(dx, dy, dw, gy - dy);
   }
 
-  function signCols(gate) {
-    if (gate._cols && gate._colsFor === view.twoRows) return gate._cols;
-    const cols = view.twoRows
-      ? Math.max(...gate.lanes.map((e) => Math.max(e.tokens.indexOf('='), e.tokens.length - e.tokens.indexOf('='))))
-      : Math.max(...gate.lanes.map((e) => e.tokens.length));
-    // Memoised on the gate object: purely a render-side cache.
-    gate._cols = cols;
-    gate._colsFor = view.twoRows;
-    return cols;
-  }
-
-  function signTileSize(cols) {
-    return view.signW / (cols + (cols - 1) * TILE_GAP + 0.5);
-  }
-
-  function signHeightUnits() {
-    const rows = view.twoRows ? 2 : 1;
-    const t = signTileSize(view.twoRows ? 5 : 8) / view.ppu;
-    return rows * t * 1.2 + t * 0.5;
-  }
-
-  /** Rasterise a whole sign (board + tiles + text + glow) once, at s = 1. */
-  function signSprite(text, state, tile, theme, urgent) {
-    const key = `s|${text}|${state}|${tile.toFixed(2)}|${view.twoRows}|${theme.name}`;
+  /** Rasterise a whole panel (board + tiles + text + glow) once, at s = 1. */
+  function panelSprite(text, state, tile, theme, urgent) {
+    const key = `p|${text}|${state}|${tile.toFixed(2)}|${view.signLayout}|${theme.name}`;
     const hit = sprites.get(key);
     if (hit) return hit;
-    // Near/visible signs (and state changes like turning teal) always render
-    // immediately; far ones wait for budget.
+    // Near/visible panels (and state changes) always render immediately; far
+    // ones wait for this frame's budget.
     if (!urgent && state === 'idle' && spriteBudget <= 0) return null;
     spriteBudget--;
 
     const tokens = [...text];
     const gap = tile * TILE_GAP;
-    const rows = view.twoRows ? splitAtEquals(tokens) : [tokens];
+    const rows = layoutTokens(tokens, view.signLayout);
+    const align = view.signLayout === 'column' ? 'right' : 'center';
     const inner = tile * 0.25;
     const rowW = (r) => r.length * tile + (r.length - 1) * gap;
     const w = Math.max(...rows.map(rowW)) + inner * 2;
     const h = rows.length * tile + (rows.length - 1) * gap + inner * 2;
     const pad = state === 'correct' ? tile * 0.9 : 2;
-    const scale = dpr * 1.15; // a little headroom for the "pop" when collected
+    const scale = dpr;
     const c = makeCanvas(Math.ceil((w + pad * 2) * scale), Math.ceil((h + pad * 2) * scale));
     const ctx = c.getContext('2d');
     ctx.scale(scale, scale);
@@ -419,7 +461,7 @@ export function createRenderer(backCanvas, frontCanvas) {
       ctx.save();
       ctx.shadowColor = theme.correct;
       ctx.shadowBlur = tile * 1.1;
-      ctx.fillStyle = hexA(theme.correct, 0.45);
+      ctx.fillStyle = hexA(theme.correct, 0.5);
       roundRect(ctx, 0, 0, w, h, tile * 0.3);
       ctx.fill();
       ctx.restore();
@@ -427,6 +469,9 @@ export function createRenderer(backCanvas, frontCanvas) {
       ctx.fillStyle = theme.signBoard;
       roundRect(ctx, 0, 0, w, h, tile * 0.3);
       ctx.fill();
+      ctx.strokeStyle = theme.post;
+      ctx.lineWidth = Math.max(1.5, tile * 0.06);
+      ctx.stroke();
     }
 
     let fill = theme.signTile;
@@ -437,11 +482,12 @@ export function createRenderer(backCanvas, frontCanvas) {
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = `900 ${tile * 0.62}px ${FONT}`;
+    ctx.font = `900 ${tile * 0.7}px ${FONT}`;
     ctx.lineWidth = Math.max(1, tile * 0.06);
+    const maxW = w - inner * 2;
     rows.forEach((row, ri) => {
       const y = inner + ri * (tile + gap);
-      let x = (w - rowW(row)) / 2;
+      let x = inner + (align === 'right' ? maxW - rowW(row) : (maxW - rowW(row)) / 2);
       for (const ch of row) {
         ctx.fillStyle = fill;
         roundRect(ctx, x, y, tile, tile, tile * 0.16);
@@ -459,63 +505,177 @@ export function createRenderer(backCanvas, frontCanvas) {
     return sprite;
   }
 
-  function drawObstacle(ctx, ob, theme) {
-    const v = view;
-    const s = scaleAt(ob.d);
-    const alpha = entityAlpha(ob.d);
-    if (alpha <= 0) return;
-    ctx.globalAlpha = ob.hit ? alpha * 0.4 : alpha;
-    const sprite = obstacleSprite(ob.kind, theme);
-    const left = laneXAt(v, -0.5, ob.d);
-    const gy = groundYAt(v, ob.d);
-    const th = sprite.th * s;
-    const width = sprite.w * s;
+  // -- physical obstacles ----------------------------------------------------
 
-    let y;
-    if (ob.kind === 'barrier') {
-      y = gy - th; // a low wall of black tiles: jump it
-    } else {
-      // An overhead beam: duck under it. Kept low (its bottom edge sits at
-      // head height) so it never hides the equation signs further back.
-      y = gy - 1.35 * v.ppu * s - th;
-      ctx.fillStyle = theme.post;
-      const pw = Math.max(2, 0.16 * v.ppu * s);
-      ctx.fillRect(left - pw, y, pw, gy - y);
-      ctx.fillRect(left + width, y, pw, gy - y);
-    }
-    ctx.drawImage(sprite.canvas, left, y, width, th);
+  /** Screen rect of a lane-wide face at depth d between heights h0..h1. */
+  function faceRect(d, lane, h0, h1, widthFrac = 0.94) {
+    const v = view;
+    const sc = scaleAt(d);
+    const gy = groundYAt(v, d);
+    const w = v.laneW * widthFrac * sc;
+    return { x: laneXAt(v, lane, d) - w / 2, y: gy - h1 * v.ppu * sc, w, h: (h1 - h0) * v.ppu * sc };
   }
 
-  /** A row of nine black hazard tiles (↑ for barriers, ↓ for beams), at s = 1. */
-  function obstacleSprite(kind, theme) {
-    const key = `o|${kind}|${theme.name}`;
-    const hit = sprites.get(key);
-    if (hit) return hit;
+  function drawHurdle(ctx, d, lane, theme, hit) {
     const v = view;
-    const w = 3 * v.laneW;
-    const tiles = 9;
-    const tw = w / tiles;
-    const th = Math.min(tw, 0.85 * v.ppu);
-    const c = makeCanvas(Math.ceil(w * dpr), Math.ceil(th * dpr));
+    const sc = scaleAt(d);
+    const r = faceRect(d, lane, HURDLE_LIFT, HURDLE_TOP, 0.9);
+    ctx.fillStyle = theme.post;
+    const legW = Math.max(2, 0.14 * v.ppu * sc);
+    ctx.fillRect(r.x + r.w * 0.08, r.y + r.h, legW, HURDLE_LIFT * v.ppu * sc);
+    ctx.fillRect(r.x + r.w * 0.92 - legW, r.y + r.h, legW, HURDLE_LIFT * v.ppu * sc);
+    if (hit) ctx.globalAlpha *= 0.45;
+    ctx.drawImage(obstacleSprite('hurdle', theme), r.x, r.y, r.w, r.h);
+    mark(r.x, r.y, r.w, r.h + HURDLE_LIFT * v.ppu * sc);
+  }
+
+  function drawBeam(ctx, d, lane, theme, hit) {
+    const v = view;
+    const sc = scaleAt(d);
+    const r = faceRect(d, lane, BEAM_BOTTOM, BEAM_TOP, 0.98);
+    const gy = groundYAt(v, d);
+    const postTop = gy - BEAM_POST_TOP * v.ppu * sc;
+    ctx.fillStyle = theme.post;
+    const pw = Math.max(3, 0.22 * v.ppu * sc);
+    ctx.fillRect(r.x - pw * 0.4, postTop, pw, gy - postTop);
+    ctx.fillRect(r.x + r.w - pw * 0.6, postTop, pw, gy - postTop);
+    if (hit) ctx.globalAlpha *= 0.45;
+    ctx.drawImage(obstacleSprite('beam', theme), r.x, r.y, r.w, r.h);
+    mark(r.x - pw, postTop, r.w + pw * 2, gy - postTop);
+  }
+
+  /** A tall block of tiles that fills its lane for WALL_LEN units: steer round. */
+  function drawWall(ctx, d, lane, s, theme, hit) {
+    const v = view;
+    const dFront = Math.max(d, NEAR_D + 1);
+    const dBack = d + WALL_LEN;
+    if (dBack <= NEAR_D + 1) return;
+    const hw = 0.47; // half-width in lanes
+    const P = (lx, h, dd) => project(v, lane + lx, h, dd);
+    const fl = P(-hw, 0, dFront);
+    const fr = P(hw, 0, dFront);
+    const ftl = P(-hw, WALL_H, dFront);
+    const ftr = P(hw, WALL_H, dFront);
+    const btl = P(-hw, WALL_H, dBack);
+    const btr = P(hw, WALL_H, dBack);
+    const xs = [fl.x, fr.x, btl.x, btr.x];
+    const ys = [fl.y, btl.y, btr.y, ftl.y];
+    mark(Math.min(...xs), Math.min(...ys), Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+
+    // Inner side face (the camera sits over the centre lane, so we see the
+    // side of outer-lane walls that faces the middle).
+    if (lane !== 1) {
+      const sx = lane === 0 ? hw : -hw;
+      const a = P(sx, 0, dFront);
+      const b = P(sx, WALL_H, dFront);
+      const c2 = P(sx, WALL_H, dBack);
+      const e = P(sx, 0, dBack);
+      ctx.fillStyle = theme.wallSide;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.lineTo(c2.x, c2.y);
+      ctx.lineTo(e.x, e.y);
+      ctx.closePath();
+      ctx.fill();
+    }
+    // Top face.
+    ctx.fillStyle = theme.wallTop;
+    ctx.beginPath();
+    ctx.moveTo(ftl.x, ftl.y);
+    ctx.lineTo(ftr.x, ftr.y);
+    ctx.lineTo(btr.x, btr.y);
+    ctx.lineTo(btl.x, btl.y);
+    ctx.closePath();
+    ctx.fill();
+    // Front face (only while it's still in front of the camera plane).
+    if (d > NEAR_D + 1) {
+      if (hit) ctx.globalAlpha *= 0.6;
+      ctx.drawImage(obstacleSprite(`wall${s.variant ?? 0}`, theme), ftl.x, ftl.y, fr.x - fl.x, fl.y - ftl.y);
+    }
+  }
+
+  /**
+   * Obstacle faces, rasterised once at a fixed reference size and scaled.
+   * All are built from black Nerdle "not in the answer" tiles.
+   */
+  function obstacleSprite(kind, theme) {
+    const key = `o|${kind}|${theme.name}|${view.ppu.toFixed(1)}`;
+    const hit = sprites.get(key);
+    if (hit) return hit.canvas;
+    const v = view;
+    let cols;
+    let rows;
+    let wFrac;
+    let hUnits;
+    let glyphs;
+    if (kind === 'hurdle') [cols, rows, wFrac, hUnits, glyphs] = [3, 1, 0.9, HURDLE_TOP - HURDLE_LIFT, ['↑']];
+    else if (kind === 'beam') [cols, rows, wFrac, hUnits, glyphs] = [3, 2, 0.98, BEAM_TOP - BEAM_BOTTOM, ['↓']];
+    else {
+      const variant = Number(kind.slice(4));
+      [cols, rows, wFrac, hUnits] = [3, 4, 0.94, WALL_H];
+      glyphs = [['?', '?', '?'], ['#'], ['×', '÷']][variant % 3];
+    }
+    const w = v.laneW * wFrac;
+    const h = hUnits * v.ppu;
+    const c = makeCanvas(Math.ceil(w * dpr), Math.ceil(h * dpr));
     const ctx = c.getContext('2d');
     ctx.scale(dpr, dpr);
+    const isWall = kind.startsWith('wall');
+    // Frame.
+    ctx.fillStyle = isWall ? theme.wallFront : theme.obstacle;
+    roundRect(ctx, 0, 0, w, h, Math.min(w, h) * 0.08);
+    ctx.fill();
+    ctx.strokeStyle = theme.obstacleEdge;
+    ctx.lineWidth = Math.max(2, v.ppu * 0.06);
+    ctx.stroke();
+    // Tiles.
+    const padX = w * 0.05;
+    const padY = h * (rows === 1 ? 0.1 : 0.04);
+    const bottomBand = kind === 'beam' ? h * 0.16 : 0;
+    const tw = (w - padX * 2) / cols;
+    const th = (h - padY * 2 - bottomBand) / rows;
+    const t = Math.min(tw, th);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = `900 ${th * 0.62}px ${FONT}`;
-    ctx.lineWidth = Math.max(1, th * 0.06);
-    for (let i = 0; i < tiles; i++) {
-      const x = i * tw + tw * 0.05;
-      ctx.fillStyle = theme.obstacle;
-      roundRect(ctx, x, ctx.lineWidth / 2, tw * 0.9, th - ctx.lineWidth, th * 0.18);
-      ctx.fill();
-      ctx.strokeStyle = theme.obstacleEdge;
-      ctx.stroke();
-      ctx.fillStyle = i % 2 ? theme.hazard : theme.obstacleText;
-      ctx.fillText(kind === 'barrier' ? '↑' : '↓', x + tw * 0.45, th * 0.55);
+    ctx.font = `900 ${t * 0.62}px ${FONT}`;
+    for (let r = 0; r < rows; r++) {
+      for (let k = 0; k < cols; k++) {
+        const x = padX + k * tw + (tw - t * 0.92) / 2;
+        const y = padY + r * th + (th - t * 0.92) / 2;
+        ctx.fillStyle = theme.obstacle;
+        roundRect(ctx, x, y, t * 0.92, t * 0.92, t * 0.16);
+        ctx.fill();
+        ctx.strokeStyle = theme.obstacleEdge;
+        ctx.lineWidth = Math.max(1, t * 0.05);
+        ctx.stroke();
+        const i = r * cols + k;
+        ctx.fillStyle = (r + k) % 2 ? theme.hazard : theme.obstacleText;
+        ctx.fillText(glyphs[i % glyphs.length], x + t * 0.46, y + t * 0.5);
+      }
     }
-    const sprite = { canvas: c, w, th };
-    remember(key, sprite);
-    return sprite;
+    if (kind === 'beam') {
+      // Yellow/black hazard stripes along the underside: "the gap is below".
+      const band = h * 0.16;
+      ctx.save();
+      roundRect(ctx, 0, h - band, w, band, band * 0.3);
+      ctx.clip();
+      ctx.fillStyle = '#161803';
+      ctx.fillRect(0, h - band, w, band);
+      ctx.fillStyle = theme.hazard;
+      for (let x = -band; x < w + band; x += band * 1.4) {
+        ctx.beginPath();
+        ctx.moveTo(x, h);
+        ctx.lineTo(x + band * 0.7, h);
+        ctx.lineTo(x + band * 1.4, h - band);
+        ctx.lineTo(x + band * 0.7, h - band);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+    remember(key, { canvas: c });
+    return c;
   }
 
   function remember(key, sprite) {
@@ -547,6 +707,7 @@ export function createRenderer(backCanvas, frontCanvas) {
         const x = p.x0 + (view.width - 64 - p.x0) * e;
         const y = p.y0 + (30 - p.y0) * e - Math.sin(k * Math.PI) * 60;
         const sz = 26 * (1 - 0.35 * k);
+        mark(x - sz, y - sz, sz * 2, sz * 2);
         ctx.globalAlpha = 1;
         ctx.fillStyle = '#4E9E8E';
         roundRect(ctx, x - sz / 2, y - sz / 2, sz, sz, sz * 0.22);
@@ -557,11 +718,14 @@ export function createRenderer(backCanvas, frontCanvas) {
         ctx.textBaseline = 'middle';
         ctx.fillText('✓', x, y + sz * 0.04);
       } else if (p.kind === 'text') {
-        ctx.font = `900 ${Math.max(20, view.ppu * 0.75)}px ${FONT}`;
+        const fs = Math.max(20, view.ppu * 0.75);
+        mark(p.x - fs * 2, p.y - fs, fs * 4, fs * 2);
+        ctx.font = `900 ${fs}px ${FONT}`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(p.text, p.x, p.y);
       } else {
+        mark(p.x - p.size, p.y - p.size, p.size * 2, p.size * 2);
         const r = p.life * p.spin;
         const c = Math.cos(r);
         const sn = Math.sin(r);
@@ -594,8 +758,7 @@ export function createRenderer(backCanvas, frontCanvas) {
     },
     reset() {
       particles.length = 0;
-      flashes.clear();
-      frontDirty = true;
+      lastBox = FULL;
     },
   };
 }

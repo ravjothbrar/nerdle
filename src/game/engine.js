@@ -5,39 +5,32 @@
 // lets the attract-mode bot drive the exact same code as a human.
 
 import { createRng } from './rng.js';
-import { generateGate } from './equations.js';
-import {
-  gateIntervalAt,
-  travelTimeAt,
-  operatorsAt,
-  obstacleGapAt,
-  decoyProgress,
-  overdrive,
-  speedLevel,
-  FIRST_OBSTACLE_AT,
-} from './difficulty.js';
+import { generateRow, WALL_LEN, isSafeSlot } from './rows.js';
+import { gateIntervalAt, travelTimeAt, operatorsAt, decoyProgress, overdrive, speedLevel } from './difficulty.js';
 import { multiplierFor, POINTS_PER_COIN } from './scoring.js';
 
+export { WALL_LEN, isSafeSlot };
+
 // World geometry. Depth `d` is measured in world units ahead of the runner:
-// things spawn at SPAWN_D and are resolved when they reach 0.
-export const SPAWN_D = 75;
+// rows spawn at SPAWN_D and are resolved when their front edge reaches 0.
+export const SPAWN_D = 100;
 export const DESPAWN_D = -14;
 export const LANES = 3;
 
 export const JUMP_TIME = 0.62; // seconds airborne
 export const DUCK_TIME = 0.62; // seconds ducking
-export const BARRIER_CLEARANCE = 0.3; // jump height (0..1) needed to clear a barrier
+export const BARRIER_CLEARANCE = 0.3; // jump height (0..1) needed to clear a hurdle
 export const INVULN_TIME = 1.2; // seconds of invulnerability after losing the shield
 export const START_SHIELDS = 1;
 export const DEATH_DELAY = 1.1; // seconds of death animation before "over"
 export const INPUT_BUFFER = 0.14; // seconds a jump/duck press is remembered
 
 /** Metres of "distance" per world unit, purely for the stats readout. */
-export const METRES_PER_UNIT = 0.5;
+export const METRES_PER_UNIT = 0.4;
 
 /**
- * `scripted: true` turns off automatic spawning (the tutorial places gates and
- * obstacles itself with spawnGate / spawnObstacle).
+ * `scripted: true` turns off automatic spawning (the tutorial places rows
+ * itself with spawnRow).
  */
 export function createGame({ seed = Date.now(), firstGateDelay = 0.35, scripted = false } = {}) {
   return {
@@ -64,18 +57,16 @@ export function createGame({ seed = Date.now(), firstGateDelay = 0.35, scripted 
     multiplier: 1,
     coins: 0,
     score: 0,
-    gates: [],
-    obstacles: [],
-    nextGateAt: scripted ? Infinity : firstGateDelay,
-    nextObstacleAt: scripted ? Infinity : FIRST_OBSTACLE_AT,
+    rows: [],
+    recentKinds: [],
+    nextRowAt: scripted ? Infinity : firstGateDelay,
     speedLevel: 0,
     nextId: 1,
     opsUnlocked: operatorsAt(0).length,
-    history: [], // one entry per resolved gate / hit: 'correct' | 'wrong' | 'shield' | 'crash'
+    history: [], // 'correct' | 'wrong' | 'shield' | 'crash', in order
     death: null,
     deathTimer: 0,
-    firstBarrierSeen: false,
-    firstBeamSeen: false,
+    seen: {}, // first-time flags for coach hints: barrier, beam, wall, mixed
     events: [],
   };
 }
@@ -117,23 +108,14 @@ export function step(g, dt, actions = []) {
   spawn(g);
 
   // Move the world towards the runner and resolve anything that reached it.
-  for (const gate of g.gates) {
-    const before = gate.d;
-    gate.d -= dd;
-    if (!gate.resolved && before > 0 && gate.d <= 0) resolveGate(g, gate);
+  for (const row of g.rows) {
+    const before = row.d;
+    row.d -= dd;
+    if (!row.resolved && before > 0 && row.d <= 0) resolveRow(g, row);
     if (g.status !== 'running') break;
   }
-  if (g.status === 'running') {
-    for (const ob of g.obstacles) {
-      const before = ob.d;
-      ob.d -= dd;
-      if (!ob.resolved && before > 0 && ob.d <= 0) resolveObstacle(g, ob);
-      if (g.status !== 'running') break;
-    }
-  }
 
-  g.gates = g.gates.filter((x) => x.d > DESPAWN_D);
-  g.obstacles = g.obstacles.filter((x) => x.d > DESPAWN_D);
+  g.rows = g.rows.filter((r) => r.d + (r.hasWall ? WALL_LEN : 0) > DESPAWN_D);
   return g.events;
 }
 
@@ -142,7 +124,10 @@ function applyActions(g, actions) {
   for (const a of actions) {
     if (a === 'left' || a === 'right') {
       const lane = Math.max(0, Math.min(LANES - 1, p.lane + (a === 'left' ? -1 : 1)));
-      if (lane !== p.lane) {
+      if (lane !== p.lane && wallAlongside(g, lane)) {
+        // You can't sidestep into the flank of a wall that's passing you.
+        g.events.push({ type: 'bump', dir: a, wall: true });
+      } else if (lane !== p.lane) {
         p.lane = lane;
         g.events.push({ type: 'lane', lane });
       } else {
@@ -202,110 +187,125 @@ function updatePlayer(g, dt) {
   }
 }
 
+/** Is a wall's body currently right beside the runner in `lane`? */
+export function wallAlongside(g, lane) {
+  return g.rows.some((r) => r.lanes[lane].type === 'wall' && r.d <= 0.6 && r.d + WALL_LEN > -0.4);
+}
+
 function spawn(g) {
-  if (g.scripted) return;
-  if (g.t >= g.nextGateAt) {
-    const { lanes, trueLane } = generateGate(g.rng, g.t, decoyProgress(g.t, g.coins));
-    spawnGate(g, lanes, trueLane);
-    g.nextGateAt = g.t + gateInterval(g);
-    const ops = operatorsAt(g.t);
-    if (ops.length > g.opsUnlocked) {
-      g.opsUnlocked = ops.length;
-      g.events.push({ type: 'unlock', op: ops[ops.length - 1] });
-    }
+  if (g.scripted || g.t < g.nextRowAt) return;
+  if (g.nextId === 1) {
+    // Open with a row already part-way down the track, so the first
+    // equation reaches you in ~3.5s rather than a full horizon-to-feet trip.
+    const lead = generateRow(g.rng, g.t, decoyProgress(g.t, g.coins), g.recentKinds);
+    spawnRow(g, lead.lanes, lead.kind, SPAWN_D - g.speed * rowInterval(g));
+    g.recentKinds.push(lead.kind);
   }
-
-  if (g.t >= g.nextObstacleAt) {
-    // Keep jumps/ducks well clear of lane decisions so both are always
-    // physically possible: no obstacle reaches the runner within `gapT`
-    // seconds of a gate.
-    const gapT = Math.min(0.42, gateInterval(g) * 0.4);
-    const gapD = gapT * g.speed;
-    const nearGate = g.gates.some((x) => Math.abs(x.d - SPAWN_D) < gapD);
-    const gateSoon = g.nextGateAt - g.t < gapT;
-    if (nearGate || gateSoon) return; // try again next frame
-
-    spawnObstacle(g, g.rng.chance(0.5) ? 'barrier' : 'beam');
-    const { min, max } = obstacleGapAt(g.t);
-    g.nextObstacleAt = g.t + min + g.rng.next() * (max - min);
+  const { kind, lanes } = generateRow(g.rng, g.t, decoyProgress(g.t, g.coins), g.recentKinds);
+  spawnRow(g, lanes, kind);
+  g.recentKinds = [...g.recentKinds.slice(-4), kind];
+  g.nextRowAt = g.t + rowInterval(g);
+  const ops = operatorsAt(g.t);
+  if (ops.length > g.opsUnlocked) {
+    g.opsUnlocked = ops.length;
+    g.events.push({ type: 'unlock', op: ops[ops.length - 1] });
   }
 }
 
-function gateInterval(g) {
+/** Seconds between rows: the time curve, tightened further by overdrive. */
+export function rowInterval(g) {
   return gateIntervalAt(g.t) / overdrive(g.coins);
 }
 
-export function spawnGate(g, lanes, trueLane) {
-  const gate = { id: g.nextId++, d: SPAWN_D, lanes, trueLane, resolved: false, spawnedAt: g.t };
-  g.gates.push(gate);
-  return gate;
-}
-
-export function spawnObstacle(g, kind) {
-  const tutorial = (kind === 'barrier' && !g.firstBarrierSeen) || (kind === 'beam' && !g.firstBeamSeen);
-  if (kind === 'barrier') g.firstBarrierSeen = true;
-  else g.firstBeamSeen = true;
-  const ob = { id: g.nextId++, kind, d: SPAWN_D, resolved: false, hit: false, tutorial };
-  g.obstacles.push(ob);
-  return ob;
-}
-
-function resolveGate(g, gate) {
-  gate.resolved = true;
-  gate.chosen = g.player.lane;
-  const eq = gate.lanes[gate.chosen];
-  if (eq.isTrue) {
-    gate.result = 'correct';
-    g.streak++;
-    g.bestStreak = Math.max(g.bestStreak, g.streak);
-    const prev = g.multiplier;
-    g.multiplier = multiplierFor(g.streak);
-    g.coins++;
-    const points = POINTS_PER_COIN * g.multiplier;
-    g.score += points;
-    g.history.push('correct');
-    g.events.push({ type: 'coin', gateId: gate.id, lane: gate.chosen, points, multiplier: g.multiplier, streak: g.streak });
-    if (g.multiplier > prev) g.events.push({ type: 'multiplier', multiplier: g.multiplier });
-    const level = speedLevel(g.coins);
-    if (level > g.speedLevel) {
-      g.speedLevel = level;
-      g.events.push({ type: 'speedup', level });
+/** Put a row on the track at the horizon. */
+export function spawnRow(g, lanes, kind = 'maths', d = SPAWN_D) {
+  const trueLane = lanes.findIndex((s) => s.type === 'eq' && s.eq.isTrue);
+  const hasWall = lanes.some((s) => s.type === 'wall');
+  // First sighting of each thing gets a one-off coach hint in the HUD.
+  let coach = null;
+  if (kind === 'mixed' && !g.seen.mixed) coach = 'mixed';
+  else if (hasWall && !g.seen.wall) coach = 'wall';
+  else {
+    for (const s of lanes) {
+      if ((s.type === 'barrier' || s.type === 'beam') && !g.seen[s.type]) coach = s.type;
     }
-  } else {
-    gate.result = 'wrong';
-    g.history.push('wrong');
-    die(g, {
-      cause: 'equation',
-      equation: eq,
-      trueEquation: gate.lanes[gate.trueLane],
-      lane: gate.chosen,
-      gateId: gate.id,
-    });
   }
+  if (coach) g.seen[coach] = true;
+  for (const s of lanes) if (s.type === 'wall' && s.variant == null) s.variant = g.nextId % 3;
+  const row = {
+    id: g.nextId++,
+    kind,
+    d,
+    lanes,
+    trueLane,
+    hasWall,
+    coach,
+    resolved: false,
+    spawnedAt: g.t,
+  };
+  g.rows.push(row);
+  return row;
 }
 
-function resolveObstacle(g, ob) {
-  ob.resolved = true;
+function resolveRow(g, row) {
+  row.resolved = true;
+  row.chosen = g.player.lane;
+  const s = row.lanes[row.chosen];
   const p = g.player;
-  const cleared =
-    ob.kind === 'barrier' ? jumpHeight(p.jumpT) >= BARRIER_CLEARANCE : p.duckT >= 0;
-  if (cleared) {
-    ob.cleared = true;
-    g.events.push({ type: 'cleared', kind: ob.kind });
+
+  if (s.type === 'eq') {
+    if (s.eq.isTrue) {
+      row.result = 'correct';
+      collect(g, row);
+    } else {
+      row.result = 'wrong';
+      g.history.push('wrong');
+      const truth = row.trueLane >= 0 ? row.lanes[row.trueLane].eq : null;
+      die(g, { cause: 'equation', equation: s.eq, trueEquation: truth, lane: row.chosen, rowId: row.id });
+    }
     return;
   }
+  if (s.type === 'empty') {
+    row.result = 'passed';
+    return;
+  }
+  const cleared =
+    (s.type === 'barrier' && jumpHeight(p.jumpT) >= BARRIER_CLEARANCE) || (s.type === 'beam' && p.duckT >= 0);
+  if (cleared) {
+    row.result = 'cleared';
+    g.events.push({ type: 'cleared', kind: s.type, lane: row.chosen });
+    return;
+  }
+  row.result = 'hit';
   if (p.invuln > 0) return; // still flashing from the last hit
-  ob.hit = true;
   if (g.shields > 0) {
     g.shields--;
     g.streak = 0;
     g.multiplier = 1;
     p.invuln = INVULN_TIME;
     g.history.push('shield');
-    g.events.push({ type: 'shield', kind: ob.kind });
+    g.events.push({ type: 'shield', kind: s.type, lane: row.chosen });
   } else {
     g.history.push('crash');
-    die(g, { cause: 'obstacle', kind: ob.kind });
+    die(g, { cause: 'obstacle', kind: s.type, lane: row.chosen, rowId: row.id });
+  }
+}
+
+function collect(g, row) {
+  g.streak++;
+  g.bestStreak = Math.max(g.bestStreak, g.streak);
+  const prev = g.multiplier;
+  g.multiplier = multiplierFor(g.streak);
+  g.coins++;
+  const points = POINTS_PER_COIN * g.multiplier;
+  g.score += points;
+  g.history.push('correct');
+  g.events.push({ type: 'coin', rowId: row.id, lane: row.chosen, points, multiplier: g.multiplier, streak: g.streak });
+  if (g.multiplier > prev) g.events.push({ type: 'multiplier', multiplier: g.multiplier });
+  const level = speedLevel(g.coins);
+  if (level > g.speedLevel) {
+    g.speedLevel = level;
+    g.events.push({ type: 'speedup', level });
   }
 }
 

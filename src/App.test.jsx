@@ -128,4 +128,18 @@ describe('GameOver', () => {
     expect(screen.getByText('Crashed!')).toBeTruthy();
     expect(screen.getByText(/duck under that beam/)).toBeTruthy();
   });
+
+  it('explains wall crashes', () => {
+    render(
+      <GameOver
+        summary={{ ...summary, death: { cause: 'obstacle', kind: 'wall' } }}
+        best={0}
+        isNewBest={false}
+        mode="endless"
+        onAgain={() => {}}
+        onMenu={() => {}}
+      />,
+    );
+    expect(screen.getByText(/Walls can’t be jumped — you needed to switch lanes/)).toBeTruthy();
+  });
 });

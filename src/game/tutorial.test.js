@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { createGame, step } from './engine.js';
-import { createTutorial, TUTORIAL_GATES } from './tutorial.js';
+import { createGame, step, isSafeSlot } from './engine.js';
+import { createTutorial, LESSONS } from './tutorial.js';
+import { bestLane } from './bot.js';
 
 const DT = 1 / 60;
 
 /** Run the tutorial with a scripted "player" function until done or timeout. */
-function play(player, maxSeconds = 60) {
+function play(player, maxSeconds = 90) {
   const g = createGame({ seed: 1, scripted: true });
   const tut = createTutorial();
   const log = { holds: 0, messages: [] };
@@ -22,64 +23,82 @@ function play(player, maxSeconds = 60) {
   return { g, tut, log };
 }
 
+/** A player who only reacts once the world freezes, and then does it right. */
+const patient = (g, tut) => {
+  if (!g.hold) return [];
+  const k = tut.message?.key;
+  if (k === 'steer') {
+    const target = bestLane(tut.row, g.player.lane);
+    return [target < g.player.lane ? 'left' : 'right'];
+  }
+  if (k === 'jump') return ['jump'];
+  if (k === 'duck') return ['duck'];
+  return [];
+};
+
 describe('tutorial', () => {
-  it('hand-picked gates each have exactly one true lane', () => {
-    for (const { lanes, trueLane } of TUTORIAL_GATES) {
-      expect(lanes.filter((e) => e.isTrue)).toHaveLength(1);
-      expect(lanes[trueLane].isTrue).toBe(true);
+  it('every lesson row has a safe lane; maths lessons have exactly one true equation', () => {
+    for (const L of LESSONS) {
+      expect(L.lanes.some(isSafeSlot)).toBe(true);
+      if (L.kind === 'maths') expect(L.lanes.filter((s) => s.eq.isTrue)).toHaveLength(1);
     }
+    // The mixed lesson's equation is deliberately false.
+    const mixed = LESSONS.find((L) => L.kind === 'mixed');
+    expect(mixed.lanes.find((s) => s.type === 'eq').eq.isTrue).toBe(false);
   });
 
   it('waits for the player at every teaching moment, then completes', () => {
-    // A player who only reacts once the world freezes.
-    const { g, tut, log } = play((g, tut) => {
-      if (!g.hold) return [];
-      const k = tut.message?.key;
-      if (k === 'steer') return [tut.gate.trueLane < g.player.lane ? 'left' : 'right'];
-      if (k === 'jump') return ['jump'];
-      if (k === 'duck') return ['duck'];
-      return [];
-    });
+    const { g, tut, log } = play(patient);
     expect(tut.done).toBe(true);
     expect(g.coins).toBe(2);
-    expect(log.holds).toBe(4); // gate A, gate B (safety net), jump, duck
-    expect(log.messages).toContain('Steer into the TRUE equation');
-    expect(log.messages).toContain('Jump!');
-    expect(log.messages).toContain('Duck!');
+    // gate A, gate B (safety net), jump, duck, wall, mixed (lane), mixed (jump)
+    expect(log.holds).toBe(7);
+    for (const m of ['Steer into the TRUE equation', 'Jump!', 'Duck!', 'Walls block the lane — switch!', 'Is 6+7=12 true?', 'You’re ready!']) {
+      expect(log.messages).toContain(m);
+    }
     expect(log.messages.at(-1)).toBe('You’re ready!');
-    expect(g.obstacles.every((o) => !o.hit)).toBe(true);
+    expect(g.rows.every((r) => r.result !== 'hit')).toBe(true);
   });
 
   it('a wrong lane is explained, never fatal', () => {
     let explained = null;
     let wrongTried = false;
     const { tut } = play((g, tut) => {
-      if (!g.hold || tut.message?.key !== 'steer') {
-        if (g.hold && tut.message?.key) return [tut.message.key];
-        return [];
-      }
-      if (!wrongTried) {
+      if (g.hold && tut.message?.key === 'steer' && !wrongTried) {
         wrongTried = true;
-        return ['left']; // middle → left: gate A's left lane (5+3=9) is false
+        return ['left']; // middle → left: the first lesson's left lane (5+3=9) is false
       }
-      if (tut.message.tone === 'bad' && !explained) explained = tut.message;
-      return [tut.gate.trueLane < g.player.lane ? 'left' : 'right'];
+      if (g.hold && tut.message?.tone === 'bad' && !explained) explained = tut.message;
+      return patient(g, tut);
     });
     expect(explained.title).toBe('✗ 5+3=9 is false');
     expect(explained.body).toBe('5+3 is 8. Try another lane.');
     expect(tut.done).toBe(true);
   });
 
+  it('explains walls when you steer into one', () => {
+    const msgs = [];
+    const { tut } = play((g, tut) => {
+      if (tut.message?.tone === 'bad') msgs.push(tut.message.title);
+      // At the wall lesson, go the wrong way first.
+      if (g.hold && tut.lesson === 4 && tut.message?.key === 'steer' && !msgs.length) return ['right'];
+      return patient(g, tut);
+    });
+    expect(msgs).toContain('✗ That’s a wall');
+    expect(tut.done).toBe(true);
+  });
+
   it('a player who already knows what to do is never frozen', () => {
     const { tut, log } = play((g) => {
-      const gate = g.gates.find((x) => !x.resolved);
+      const row = g.rows.find((x) => !x.resolved);
+      if (!row) return [];
       const acts = [];
-      if (gate && gate.trueLane !== g.player.lane) acts.push(gate.trueLane < g.player.lane ? 'left' : 'right');
-      const ob = g.obstacles.find((x) => !x.resolved);
-      if (ob && ob.d / g.speed < 0.3) {
-        if (ob.kind === 'barrier' && g.player.jumpT < 0) acts.push('jump');
-        if (ob.kind === 'beam' && g.player.duckT < 0) acts.push('duck');
-      }
+      const target = bestLane(row, g.player.lane);
+      if (target !== g.player.lane) acts.push(target < g.player.lane ? 'left' : 'right');
+      const s = row.lanes[g.player.lane];
+      const eta = row.d / g.speed;
+      if (s.type === 'barrier' && g.player.jumpT < 0 && eta < 0.3) acts.push('jump');
+      if (s.type === 'beam' && g.player.duckT < 0 && eta < 0.3) acts.push('duck');
       return acts;
     });
     expect(tut.done).toBe(true);
@@ -93,8 +112,7 @@ describe('tutorial', () => {
       seed = (seed * 16807) % 2147483647;
       return seed % 5 === 0 ? [inputs[seed % 4]] : [];
     }, 400);
-    // Random mashing might take a while, but must never end the run
-    // (asserted every tick inside play()).
+    // Never dies (asserted every tick inside play()).
     expect(typeof tut.done).toBe('boolean');
   });
 });

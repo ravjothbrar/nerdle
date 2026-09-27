@@ -72,6 +72,24 @@ describe('App', () => {
   });
 });
 
+describe('maths levels', () => {
+  it('picking a level is remembered, and each level keeps its own best', () => {
+    localStorage.clear();
+    localStorage.setItem('nerdle-rush:best', '500'); // a best from before levels existed
+    render(<App />);
+    // Medium is the default and inherits the old best.
+    expect(screen.getByTestId('level-medium').getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByText('best 500')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('level-hard'));
+    expect(screen.getByTestId('level-hard').getAttribute('aria-checked')).toBe('true');
+    expect(JSON.parse(localStorage.getItem('nerdle-rush:level'))).toBe('hard');
+    expect(screen.getByText('best 0')).toBeTruthy();
+    expect(screen.getByText(/two-digit sums/)).toBeTruthy();
+    fireEvent.click(screen.getByTestId('level-easy'));
+    expect(screen.getByText(/\+ and − to 20/)).toBeTruthy();
+  });
+});
+
 describe('GameOver', () => {
   const summary = {
     score: 120,
@@ -94,6 +112,21 @@ describe('GameOver', () => {
     expect(screen.getByRole('img', { name: '6×9=54' })).toBeTruthy();
     expect(screen.getByText(/New best/)).toBeTruthy();
     expect(screen.getByText('250m')).toBeTruthy();
+  });
+
+  it('shows which level the run was on', () => {
+    render(
+      <GameOver
+        summary={{ ...summary, level: 'hard' }}
+        best={120}
+        isNewBest
+        mode="endless"
+        onAgain={() => {}}
+        onMenu={() => {}}
+      />,
+    );
+    expect(screen.getByText('★ New Hard best!')).toBeTruthy();
+    expect(screen.getAllByText('Hard').length).toBeGreaterThan(0);
   });
 
   it('points out swapped operators', () => {

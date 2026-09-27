@@ -2,15 +2,77 @@
 // seconds survived and/or the number of correct lanes (coins). Keeping the curve in one place makes it easy to tune (and
 // to test) without touching the engine or the equation generator.
 
-export const TIER_TIMES = { multiply: 20, divide: 45 };
-
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 
-/** Operators allowed at time `t` (seconds). */
-export function operatorsAt(t) {
-  if (t < TIER_TIMES.multiply) return ['+', '-'];
-  if (t < TIER_TIMES.divide) return ['+', '-', '×'];
-  return ['+', '-', '×', '÷'];
+/**
+ * Maths levels. Only the SUMS change between them — the track speed,
+ * obstacles and scoring are identical, so a level is purely "how hard is the
+ * arithmetic?".
+ *
+ *   easy    + and − within 20; × up to 5×5 later; no ÷. Decoys stay
+ *           obviously wrong (never sharper than off-by-2ish).
+ *   medium  the standard game.
+ *   hard    two-digit numbers from the first row, × at 8s and ÷ at 20s with
+ *           tables to 12, and decoys that start sharp (near-misses, carries).
+ */
+export const LEVELS = {
+  easy: {
+    id: 'easy',
+    label: 'Easy',
+    blurb: '+ and − to 20, small times tables',
+    example: '8+5=13',
+    unlock: { multiply: 25, divide: Infinity },
+    ranges: {
+      add: { min: [1, 1], max: [6, 10] },
+      sub: { aMin: [2, 2], bMin: [1, 1], max: [10, 20] },
+      mul: { min: [2, 2], aMax: [4, 5], bMax: [4, 5] },
+      div: { divisorMax: [2, 2], quotientMax: [2, 2] },
+    },
+    sharp: { start: 0, byTime: 240, byCoins: 90, cap: 0.35 },
+  },
+  medium: {
+    id: 'medium',
+    label: 'Medium',
+    blurb: 'up to 99, × and ÷ tables to 12',
+    example: '27+18=45',
+    unlock: { multiply: 20, divide: 45 },
+    ranges: {
+      add: { min: [1, 1], max: [9, 49] },
+      sub: { aMin: [2, 2], bMin: [1, 1], max: [18, 99] },
+      mul: { min: [2, 2], aMax: [6, 9], bMax: [6, 12] },
+      div: { divisorMax: [5, 9], quotientMax: [6, 12] },
+    },
+    sharp: { start: 0, byTime: 120, byCoins: 45, cap: 1 },
+  },
+  hard: {
+    id: 'hard',
+    label: 'Hard',
+    blurb: 'two-digit sums, full tables, sneaky decoys',
+    example: '9×12=108',
+    unlock: { multiply: 8, divide: 20 },
+    ranges: {
+      add: { min: [11, 14], max: [49, 49] },
+      sub: { aMin: [21, 30], bMin: [6, 11], max: [60, 99] },
+      mul: { min: [3, 4], aMax: [9, 12], bMax: [9, 12] },
+      div: { divisorMax: [9, 12], quotientMax: [9, 12] },
+    },
+    sharp: { start: 0.4, byTime: 90, byCoins: 30, cap: 1 },
+  },
+};
+export const LEVEL_IDS = ['easy', 'medium', 'hard'];
+export const DEFAULT_LEVEL = 'medium';
+const lv = (level) => LEVELS[level] ?? LEVELS[DEFAULT_LEVEL];
+
+/** @deprecated medium-level unlock times, kept for reference in docs/tests. */
+export const TIER_TIMES = LEVELS.medium.unlock;
+
+/** Operators allowed at time `t` (seconds) on a given level. */
+export function operatorsAt(t, level = DEFAULT_LEVEL) {
+  const u = lv(level).unlock;
+  const ops = ['+', '-'];
+  if (t >= u.multiply) ops.push('×');
+  if (t >= u.divide) ops.push('÷');
+  return ops;
 }
 
 /** Seconds between rows: 2.5s at the start, easing towards 1.0s. */
@@ -34,8 +96,9 @@ export function travelTimeAt(t) {
  * survived or correct answers — so a player who is racking up a big score
  * gets close-cut decoys quickly, rather than waiting for the clock.
  */
-export function decoyProgress(t, coins = 0) {
-  return clamp01(Math.max(t / 120, coins / 45));
+export function decoyProgress(t, coins = 0, level = DEFAULT_LEVEL) {
+  const k = lv(level).sharp;
+  return Math.min(k.cap, clamp01(k.start + Math.max(t / k.byTime, coins / k.byCoins)));
 }
 
 /**
@@ -66,14 +129,15 @@ export function operatorSwapChance(p) {
  * Operand ranges grow over time. Equations are capped at 8 tiles — the same
  * length as a classic Nerdle row.
  */
-export function operandRangesAt(t) {
+export function operandRangesAt(t, level = DEFAULT_LEVEL) {
   const p = clamp01(t / 90);
-  const lerp = (a, b) => Math.round(a + (b - a) * p);
+  const r = lv(level).ranges;
+  const lerp = ([a, b]) => Math.round(a + (b - a) * p);
   return {
-    add: { max: lerp(9, 49) }, // a + b, each operand 1..max
-    sub: { max: lerp(18, 99) }, // a - b, a up to max
-    mul: { aMax: lerp(6, 9), bMax: lerp(6, 12) },
-    div: { divisorMax: lerp(5, 9), quotientMax: lerp(6, 12) },
+    add: { min: lerp(r.add.min), max: lerp(r.add.max) }, // a + b, each operand min..max
+    sub: { aMin: lerp(r.sub.aMin), bMin: lerp(r.sub.bMin), max: lerp(r.sub.max) }, // a − b: aMin ≤ a ≤ max, b ≥ bMin
+    mul: { min: lerp(r.mul.min), aMax: lerp(r.mul.aMax), bMax: lerp(r.mul.bMax) },
+    div: { divisorMax: lerp(r.div.divisorMax), quotientMax: lerp(r.div.quotientMax) },
   };
 }
 

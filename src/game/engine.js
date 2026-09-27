@@ -6,7 +6,15 @@
 
 import { createRng } from './rng.js';
 import { generateRow, WALL_LEN, isSafeSlot } from './rows.js';
-import { gateIntervalAt, travelTimeAt, operatorsAt, decoyProgress, overdrive, speedLevel } from './difficulty.js';
+import {
+  gateIntervalAt,
+  travelTimeAt,
+  operatorsAt,
+  decoyProgress,
+  overdrive,
+  speedLevel,
+  DEFAULT_LEVEL,
+} from './difficulty.js';
 import { multiplierFor, POINTS_PER_COIN } from './scoring.js';
 
 export { WALL_LEN, isSafeSlot };
@@ -32,9 +40,10 @@ export const METRES_PER_UNIT = 0.4;
  * `scripted: true` turns off automatic spawning (the tutorial places rows
  * itself with spawnRow).
  */
-export function createGame({ seed = Date.now(), firstGateDelay = 0.35, scripted = false } = {}) {
+export function createGame({ seed = Date.now(), firstGateDelay = 0.35, scripted = false, level = DEFAULT_LEVEL } = {}) {
   return {
     seed,
+    level, // maths level: 'easy' | 'medium' | 'hard'
     rng: createRng(seed),
     status: 'running', // 'running' | 'dying' | 'over'
     scripted,
@@ -62,7 +71,7 @@ export function createGame({ seed = Date.now(), firstGateDelay = 0.35, scripted 
     nextRowAt: scripted ? Infinity : firstGateDelay,
     speedLevel: 0,
     nextId: 1,
-    opsUnlocked: operatorsAt(0).length,
+    opsUnlocked: operatorsAt(0, level).length,
     history: [], // 'correct' | 'wrong' | 'shield' | 'crash', in order
     death: null,
     deathTimer: 0,
@@ -197,15 +206,15 @@ function spawn(g) {
   if (g.nextId === 1) {
     // Open with a row already part-way down the track, so the first
     // equation reaches you in ~3.5s rather than a full horizon-to-feet trip.
-    const lead = generateRow(g.rng, g.t, decoyProgress(g.t, g.coins), g.recentKinds);
+    const lead = generateRow(g.rng, g.t, decoyProgress(g.t, g.coins, g.level), g.recentKinds, g.level);
     spawnRow(g, lead.lanes, lead.kind, SPAWN_D - g.speed * rowInterval(g));
     g.recentKinds.push(lead.kind);
   }
-  const { kind, lanes } = generateRow(g.rng, g.t, decoyProgress(g.t, g.coins), g.recentKinds);
+  const { kind, lanes } = generateRow(g.rng, g.t, decoyProgress(g.t, g.coins, g.level), g.recentKinds, g.level);
   spawnRow(g, lanes, kind);
   g.recentKinds = [...g.recentKinds.slice(-4), kind];
   g.nextRowAt = g.t + rowInterval(g);
-  const ops = operatorsAt(g.t);
+  const ops = operatorsAt(g.t, g.level);
   if (ops.length > g.opsUnlocked) {
     g.opsUnlocked = ops.length;
     g.events.push({ type: 'unlock', op: ops[ops.length - 1] });
@@ -327,5 +336,6 @@ export function summarize(g) {
     history: g.history.slice(),
     death: g.death,
     seed: g.seed,
+    level: g.level,
   };
 }

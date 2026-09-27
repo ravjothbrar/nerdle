@@ -10,6 +10,14 @@ import {
 } from './components/Screens.jsx';
 import { createAudio } from './audio.js';
 import { load, save, todayKey } from './game/share.js';
+import { LEVEL_IDS, DEFAULT_LEVEL } from './game/difficulty.js';
+
+/** Best scores per maths level. A pre-levels single best becomes Medium's. */
+function loadBests() {
+  const saved = load('bests', null);
+  if (saved && typeof saved === 'object') return { easy: 0, medium: 0, hard: 0, ...saved };
+  return { easy: 0, medium: load('best', 0), hard: 0 };
+}
 
 export default function App() {
   const audio = useMemo(() => createAudio(), []);
@@ -18,8 +26,15 @@ export default function App() {
   const [theme, setTheme] = useState(() => load('theme', prefersDark() ? 'mathlete' : 'classic'));
   const [muted, setMuted] = useState(() => load('muted', false));
   const [mode, setMode] = useState(() => load('mode', 'endless'));
-  const [best, setBest] = useState(() => load('best', 0));
-  const [dailyBest, setDailyBest] = useState(() => load(`daily:${todayKey()}`, null));
+  const [level, setLevel] = useState(() => {
+    const l = load('level', DEFAULT_LEVEL);
+    return LEVEL_IDS.includes(l) ? l : DEFAULT_LEVEL;
+  });
+  const [bests, setBests] = useState(loadBests);
+  const best = bests[level] ?? 0;
+  const dailyKey = `daily:${todayKey()}:${level}`;
+  const [dailyBests, setDailyBests] = useState({});
+  const dailyBest = dailyKey in dailyBests ? dailyBests[dailyKey] : load(dailyKey, null);
   const [runId, setRunId] = useState(0);
   const [summary, setSummary] = useState(null);
   const [isNewBest, setIsNewBest] = useState(false);
@@ -37,6 +52,7 @@ export default function App() {
     save('muted', muted);
   }, [muted, audio]);
   useEffect(() => save('mode', mode), [mode]);
+  useEffect(() => save('level', level), [level]);
 
   const seed = useMemo(
     () => (mode === 'daily' ? `daily:${todayKey()}` : Math.floor(Math.random() * 2 ** 31)),
@@ -80,16 +96,17 @@ export default function App() {
       const newBest = s.score > best;
       setIsNewBest(newBest && s.score > 0);
       if (newBest) {
-        setBest(s.score);
-        save('best', s.score);
+        const next = { ...bests, [level]: s.score };
+        setBests(next);
+        save('bests', next);
       }
       if (mode === 'daily' && (dailyBest == null || s.score > dailyBest)) {
-        setDailyBest(s.score);
-        save(`daily:${todayKey()}`, s.score);
+        setDailyBests((d) => ({ ...d, [dailyKey]: s.score }));
+        save(dailyKey, s.score);
       }
       setScreen('over');
     },
-    [best, dailyBest, mode],
+    [best, bests, level, dailyBest, dailyKey, mode],
   );
 
   // Enter / Space starts a run from the menus.
@@ -127,6 +144,7 @@ export default function App() {
           key={inRun ? `run-${runId}` : inTutorial ? `tutorial-${runId}` : 'attract'}
           mode={inRun ? 'play' : inTutorial ? 'tutorial' : 'attract'}
           seed={inRun ? seed : inTutorial ? 'tutorial' : 'attract'}
+          level={level}
           theme={theme}
           audio={audio}
           paused={paused || rules}
@@ -141,6 +159,8 @@ export default function App() {
             onPlay={play}
             mode={mode}
             onMode={setMode}
+            level={level}
+            onLevel={setLevel}
             best={best}
             dailyBest={dailyBest}
             theme={theme}

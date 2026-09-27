@@ -190,8 +190,12 @@ export function RulesModal({ onClose, onTutorial }) {
             <b>A false equation ends the run. Always.</b> No shield, no second chance — the maths is the point.
           </li>
           <li>
-            <b>Jump barriers, duck beams.</b> You carry one shield for these: the first hit costs the shield
-            and your streak, the second ends the run.
+            <b>Jump hurdles, duck beams, dodge walls.</b> Walls fill a whole lane — switch lanes. You carry one
+            shield for obstacles: the first hit costs the shield and your streak, the second ends the run.
+          </li>
+          <li>
+            <b>Equation or obstacle?</b> Some rows put an equation next to a hurdle or a wall. Run through the
+            equation only if it’s true — otherwise take the other route.
           </li>
           <li>
             <b>Build a streak.</b> Every 5 true lanes in a row raises your multiplier (up to ×5). Each coin is
@@ -384,8 +388,14 @@ function Crashed({ kind }) {
       </div>
       <h2>Crashed!</h2>
       <p className="caught__sentence">
-        {kind === 'beam' ? 'You needed to duck under that beam' : 'You needed to jump that barrier'} — and your
-        shield was already gone.
+        {
+          {
+            beam: 'You needed to duck under that beam',
+            barrier: 'You needed to jump that hurdle',
+            wall: 'Walls can’t be jumped — you needed to switch lanes',
+          }[kind] ?? 'You hit an obstacle'
+        }{' '}
+        — and your shield was already gone.
       </p>
     </div>
   );

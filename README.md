@@ -2,7 +2,7 @@
 
 **An endless runner where the only way forward is the true equation.**
 
-Three lanes. Three equations. Exactly one is true. Steer into it before it reaches you — steer into a false one and the run is over. Instantly. No shield, no second chance, no matter how far you've come.
+Three lanes. Equations race towards you on tile panels. Run through a true one and it shatters into a coin; run into a false one and the run is over, instantly. No shield, no second chance, no matter how far you've come. In between come Subway-Surfers-style walls, hurdles and beams, sometimes in the same row as the maths.
 
 It's the Nerdle skill — *does this calculation hold?* — compressed into a second, under pressure, getting faster.
 
@@ -32,15 +32,35 @@ npm run dev        # http://localhost:5173
 | Duck (beams) | ↓ or S | swipe down |
 | Pause | P or Esc | ⏸ button |
 
-The first time you press **PLAY** you get a 30-second guided tutorial (skippable, replayable from *All rules*).
+The first time you press **PLAY** you get a short guided tutorial: steer, jump, duck, walls, and "equation or hurdle?". The world freezes at each teaching moment until you do the right thing, and a wrong move gets an explanation ("5+3=9 is false — 5+3 is 8") rather than a game over. It's skippable, and you can replay it from *All rules*.
 
 ## The design, in one paragraph
 
-The maths is the point, so the maths is unforgiving: a false lane always ends the run. The platforming is not the point, so it's forgiving: barriers and beams follow standard runner rules — you carry one shield, the first hit costs the shield and your streak multiplier, the second hit ends the run. **Soft on reflexes, hard on maths.**
+The maths is the point, so the maths is unforgiving: running into a false equation always ends the run. The platforming is not the point, so it's forgiving: walls, hurdles and beams follow standard runner rules — you carry one shield, the first hit costs the shield and your streak multiplier, the second hit ends the run. **Soft on reflexes, hard on maths.**
 
 ## How it plays
 
-**Exactly one of three lanes is true, every time.** Each gate is three independently generated equations; one is left true, the other two are perturbed. Independence matters: if the decoys were built from the true equation (7×8=56 / 7×8=54 / 7+8=56), you could find the answer without doing any maths — pick the lane that shares the most with the other two. With independent lanes every sign is an honest true-or-false check. (There's a test for this.)
+Everything arrives as a **row**: three lanes side by side, reaching you at the same moment, on an even beat. Rows are never bunched together. Each lane holds one of:
+
+| Lane | What it is | What to do |
+|---|---|---|
+| **Equation panel** | a standing board of Nerdle tiles | run through it if it's **true** (coin); a false one ends the run |
+| **Wall** | a tall 3D block of black tiles | can't be jumped or ducked — switch lanes (you can't sidestep into one that's passing you, either) |
+| **Hurdle** | a low bar | jump |
+| **Beam** | a tall overhead gantry with a hazard-striped underside | duck |
+| Open | nothing | run straight through |
+
+There are three kinds of row:
+
+- **Maths rows:** three equations, exactly one true. This is the core of the game and always the majority (never more than two non-maths rows in a row).
+- **Mixed rows:** maths next to physical obstacles. Either a true and a false equation beside a wall (pick the true one), or **one equation, true or false, beside a hurdle or beam and a wall**. Take the equation only if it's true; otherwise take the physical route.
+- **Obstacle rows:** no maths, just per-lane walls, hurdles and beams in different combinations.
+
+Every row always has at least one lane you can get through cleanly. A test plays 12 seeds for 3 minutes each with an autopilot to prove it.
+
+**Exactly one of three is true in a maths row, and there's no shortcut.** Each equation is generated independently; one is left true and the others are perturbed. If the decoys were built from the true equation (7×8=56 / 7×8=54 / 7+8=56), you could find the answer without doing any maths — pick the lane that shares the most with the other two. With independent lanes every panel is an honest true-or-false check. (There's a test for this.)
+
+**Big, readable maths.** The camera sits high and looks down the track, like Subway Surfers: the horizon is near the top of the screen and rows spread down its full height, so you can read two or three rows ahead. On laptops, panels show the equation in two lines (`12+39` / `=51`). On phones they switch to right-aligned column arithmetic (`12` / `+39` / `=51`), which roughly doubles the tile size. Tile size is uniform from row to row, so a near panel never hides the one behind it.
 
 **Decoys are believable, and get sneakier as your score climbs.** Decoy sharpness is driven by *whichever is further along — time survived or correct answers* — so a strong player hits the hard stuff quickly:
 
@@ -57,14 +77,13 @@ Decoys keep the same tile count as the true equation wherever possible, so lengt
 
 | When | What changes |
 |---|---|
-| 0s | + and − only, 2.5s between gates, 4.4s to read each one |
+| 0s | + and − only, maths rows only, 2.5s between rows, two rows already on the track so the first coin lands at ~3.5s |
+| 8s | walls, hurdles, beams and mixed rows join in |
 | 20s | × unlocks |
 | 45s | ÷ unlocks |
-| ongoing | gate interval eases 2.5s → 1s; reading window 4.4s → 1.8s; operands grow |
+| ongoing | row interval eases 2.5s → 1s; a row is on screen for 5.9s at the start, easing to 2.4s; operands grow |
 | score-driven | decoys sharpen from "obviously wrong" to near-misses and classic slips |
 | 40+ correct | **overdrive**: the track keeps accelerating past the time curve (up to 1.5×), with a ⚡ callout every 15 more |
-
-Physical obstacles start at 7s and are never placed within ~0.4s of a gate, so a jump and a lane decision never collide.
 
 **Scoring.** Each true lane is a coin worth 10 × your multiplier. The multiplier goes up by one every 5 correct in a row (max ×5) and resets to ×1 when you hit an obstacle. Distance and time are tracked as secondary stats.
 
@@ -78,37 +97,48 @@ Classic mode mirrors nerdlegame.com: plum `#7A1F4B`, teal `#4E9E8E`, white chrom
 
 ## Performance
 
-Built to hold 60fps on a mid-range phone. The renderer caches everything static (sky, track, rails) once per resize, rasterises each equation sign and obstacle once into a sprite and then only scales it, batches the moving track seams into one fill, and caps canvas resolution by pixel budget. If frames still run long, adaptive quality lowers the resolution a notch and raises it back once there's headroom. React only re-renders when a HUD number changes.
+Built to hold 60fps on a mid-range phone. The renderer:
+
+- caches everything static (sky, track, rails) once per resize
+- rasterises each equation panel and obstacle face once into a sprite, then only scales it, at most one new sprite per frame
+- batches the moving track seams into one fill
+- clears only the region of the front layer that was painted last frame
+- caps canvas resolution by pixel budget
+
+If frames still run long, adaptive quality lowers the resolution a notch, keeping its sprites, and raises it back once there's headroom. React only re-renders when a HUD number changes.
 
 `npm run perf` (headless Chromium, **no GPU**, in overdrive at top speed):
 
 | Profile | Before optimisation | Now |
 |---|---|---|
 | Laptop 1440×900 @2x | 31 fps | **60 fps** |
-| Phone 390×844 @3x, CPU throttled 4× | 17 fps | **60 fps** |
-| Phone 390×844 @3x, CPU throttled 6× | 12 fps | **58 fps** |
+| Phone 390×844 @3x, CPU throttled 4× | 17 fps | **57–60 fps** |
+| Phone 390×844 @3x, CPU throttled 6× | 12 fps | **57 fps** |
 
 ## Tests
 
 ```bash
-npm test           # 64 unit + component tests (Vitest)
+npm test           # 80 unit + component tests (Vitest)
 npm run build && npm run e2e    # real Chromium: tutorial, runs, caught-out screens
 npm run build && npm run perf   # frame-rate benchmark
 ```
 
 The unit tests check things like:
-- every generated gate has exactly one true lane, verified by recomputing the maths rather than trusting the generator
+- every maths row has exactly one true lane, verified by recomputing the maths rather than trusting the generator
 - no negatives, fractions or more than 8 tiles
 - lane lengths match; the true lane's position is uniform
 - no "odd one out" shortcut
 - ×/÷ unlock at 20s/45s
 - decoy margins and kinds at each sharpness level; sharp decoys are mostly close cuts
 - no absurd operator swaps
-- a false lane kills even with a shield and 30 correct behind you
+- every generated row has a survivable lane, never three walls, and maths stays the majority
+- rows arrive on an even beat
+- a false equation kills even with a shield and 30 correct behind you
+- walls can't be jumped, ducked or sidestepped into mid-pass
 - shield and multiplier rules; invulnerability frames; jump and duck timing
 - overdrive speed-ups
 - a perfect autopilot survives 3 minutes on 12 seeds, so every run is fair
-- obstacles never land on a gate; same seed gives the same run
+- same seed gives the same run
 - the tutorial can't be failed, even by random mashing
 - share-card text
 
@@ -120,9 +150,10 @@ The e2e test plays with real key presses, deliberately steers into a false lane,
 src/
   game/            pure logic — no DOM, fully unit-tested
     equations.js     generator: true equations, decoys, explanations
+    rows.js          what arrives in each lane: maths / mixed / obstacle rows
     difficulty.js    every difficulty knob, as pure functions of time/score
     engine.js        the simulation: createGame / step(game, dt, actions)
-    tutorial.js      scripted first-play tutorial on top of the real engine
+    tutorial.js      scripted first-play lessons on top of the real engine
     scoring.js  share.js  bot.js  rng.js
   render/          canvas renderer, projection, colour themes
   components/      React: GameView (rAF loop), HUD, screens, mascot, tiles

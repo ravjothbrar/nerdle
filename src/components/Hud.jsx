@@ -48,10 +48,7 @@ export default function Hud({ score, coins, multiplier, streak, shields, toasts,
       )}
       {coach && (
         <div className="hud__coach" key={coach}>
-          <kbd>{coach === 'barrier' ? '↑' : '↓'}</kbd>{' '}
-          {coach === 'barrier'
-            ? isTouch() ? 'Swipe up to jump!' : 'Jump the barrier!'
-            : isTouch() ? 'Swipe down to duck!' : 'Duck under the beam!'}
+          <CoachText kind={coach} />
         </div>
       )}
       {hint && !coach && (
@@ -110,4 +107,22 @@ function LessonKeys({ verb }) {
   if (verb === 'jump')
     return <div className="lesson__keys">{touch ? <span>Swipe up ↑</span> : <><kbd>↑</kbd> <span>or</span> <kbd>W</kbd> <span>/</span> <kbd>Space</kbd></>}</div>;
   return <div className="lesson__keys">{touch ? <span>Swipe down ↓</span> : <><kbd>↓</kbd> <span>or</span> <kbd>S</kbd></>}</div>;
+}
+
+function CoachText({ kind }) {
+  const touch = isTouch();
+  if (kind === 'barrier')
+    return (
+      <>
+        <kbd>↑</kbd> {touch ? 'Swipe up to jump!' : 'Jump the hurdle!'}
+      </>
+    );
+  if (kind === 'beam')
+    return (
+      <>
+        <kbd>↓</kbd> {touch ? 'Swipe down to duck!' : 'Duck under the beam!'}
+      </>
+    );
+  if (kind === 'wall') return <>🧱 Walls can’t be jumped — switch lanes!</>;
+  return <>Take the equation only if it’s TRUE — else the other route</>;
 }

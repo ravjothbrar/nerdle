@@ -13,18 +13,20 @@ export function operatorsAt(t) {
   return ['+', '-', '×', '÷'];
 }
 
-/** Seconds between equation gates: 2.5s at the start, easing towards 1.0s. */
+/** Seconds between rows: 2.5s at the start, easing towards 1.0s. */
 export function gateIntervalAt(t) {
   return 1.0 + 1.5 * Math.exp(-t / 55);
 }
 
 /**
- * Seconds a gate takes to travel from the horizon to the runner. This is the
- * player's whole reading window, so it starts generous (4.4s) and tightens
- * towards ~1.8s. The world speed is derived from it.
+ * Seconds a row takes to travel from the horizon to the runner. The view
+ * reaches far ahead (like Subway Surfers), so a row is on screen for 5.9s at
+ * the start, tightening towards ~2.4s. World speed (units/s) is derived from
+ * it: SPAWN_D / travelTimeAt(t).
  */
+export const VIEW_SCALE = 100 / 75;
 export function travelTimeAt(t) {
-  return 1.8 + 2.6 * Math.exp(-t / 60);
+  return (1.8 + 2.6 * Math.exp(-t / 60)) * VIEW_SCALE;
 }
 
 /**
@@ -90,13 +92,4 @@ export function overdrive(coins) {
 /** 0 before overdrive, then 1, 2, 3… every OVERDRIVE_STEP more correct lanes. */
 export function speedLevel(coins) {
   return coins < OVERDRIVE_FROM ? 0 : 1 + Math.floor((coins - OVERDRIVE_FROM) / OVERDRIVE_STEP);
-}
-
-/** Physical obstacles (jump / duck) start after a short grace period. */
-export const FIRST_OBSTACLE_AT = 7;
-
-/** [min, max] seconds between physical obstacles. */
-export function obstacleGapAt(t) {
-  const p = clamp01((t - FIRST_OBSTACLE_AT) / 100);
-  return { min: 3.6 - 1.6 * p, max: 6 - 2.6 * p };
 }

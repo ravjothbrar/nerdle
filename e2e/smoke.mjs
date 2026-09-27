@@ -9,10 +9,11 @@
 
 import { preview } from 'vite';
 import { chromium } from 'playwright-core';
-import { mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync, rmSync } from 'node:fs';
 import assert from 'node:assert/strict';
 
 const OUT = new URL('./out/', import.meta.url).pathname;
+rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 
 const candidates = [
@@ -20,6 +21,22 @@ const candidates = [
   '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
 ].filter(Boolean);
 const executablePath = candidates.find((p) => existsSync(p));
+
+// In-page autopilot: the best lane for the next row, and any jump/duck needed.
+const BRAIN = `(() => {
+  const g = window.__rush;
+  const row = g.rows.filter((r) => !r.resolved).sort((a, b) => a.d - b.d)[0];
+  if (!row) return { status: g.status };
+  const score = (s) => s.type === 'eq' ? (s.eq.isTrue ? 3 : -1) : s.type === 'empty' ? 2 : s.type === 'wall' ? -1 : 1;
+  let best = g.player.lane, key = -1e9;
+  row.lanes.forEach((s, l) => { const k = score(s) * 10 - Math.abs(l - g.player.lane); if (score(s) >= 0 && k > key) { key = k; best = l; } });
+  const mine = row.lanes[g.player.lane];
+  const eta = row.d / g.speed;
+  let action = null;
+  if (mine.type === 'barrier' && eta < 0.25 && eta > 0 && g.player.jumpT < 0) action = 'ArrowUp';
+  if (mine.type === 'beam' && eta < 0.22 && eta > 0 && g.player.duckT < 0) action = 'ArrowDown';
+  return { status: g.status, lane: g.player.lane, best, action, hold: g.hold };
+})()`;
 
 const server = await preview({ preview: { port: 4173, strictPort: false }, logLevel: 'error' });
 const url = server.resolvedUrls.local[0];
@@ -41,30 +58,23 @@ async function run(name, viewport, theme, isMobile = false) {
   await page.screenshot({ path: `${OUT}${name}-1-start.png` });
 
   await page.click('[data-testid="play"]');
-  await page.waitForFunction(() => window.__rush && window.__rush.gates.length > 0);
+  await page.waitForFunction(() => window.__rush && window.__rush.rows.length > 0);
 
-  // Play properly for ~12 seconds using real key presses.
+  // Play properly for ~14 seconds using real key presses.
   const steerKey = async () => {
-    const want = await page.evaluate(() => {
-      const g = window.__rush;
-      const gate = g.gates.filter((x) => !x.resolved).sort((a, b) => a.d - b.d)[0];
-      const ob = g.obstacles.filter((x) => !x.resolved).sort((a, b) => a.d - b.d)[0];
-      let key = null;
-      if (gate && gate.trueLane !== g.player.lane) key = gate.trueLane < g.player.lane ? 'ArrowLeft' : 'ArrowRight';
-      let action = null;
-      if (ob && ob.d / g.speed < 0.25 && ob.d > 0) action = ob.kind === 'barrier' ? 'ArrowUp' : 'ArrowDown';
-      return { key, action };
-    });
-    if (want.key) await page.keyboard.press(want.key);
+    const want = await page.evaluate(BRAIN);
+    if (want.best != null && want.best !== want.lane) await page.keyboard.press(want.best < want.lane ? 'ArrowLeft' : 'ArrowRight');
     if (want.action) await page.keyboard.press(want.action);
   };
   const t0 = Date.now();
   let shot = false;
   let obShot = false;
-  while (Date.now() - t0 < 12000) {
+  while (Date.now() - t0 < 14000) {
     await steerKey();
     if (!obShot) {
-      const near = await page.evaluate(() => window.__rush.obstacles.some((o) => o.d > 12 && o.d < 30));
+      const near = await page.evaluate(() =>
+        window.__rush.rows.some((r) => r.d > 15 && r.d < 45 && r.lanes.some((x) => x.type !== 'eq')),
+      );
       if (near) {
         await page.screenshot({ path: `${OUT}${name}-2b-obstacle.png` });
         obShot = true;
@@ -76,24 +86,34 @@ async function run(name, viewport, theme, isMobile = false) {
     }
     await page.waitForTimeout(40);
   }
-  const mid = await page.evaluate(() => ({ coins: window.__rush.coins, status: window.__rush.status, score: window.__rush.score }));
+  const mid = await page.evaluate(() => ({
+    coins: window.__rush.coins,
+    status: window.__rush.status,
+    score: window.__rush.score,
+    shields: window.__rush.shields,
+  }));
   assert.equal(mid.status, 'running', `${name}: should survive while playing correctly`);
+  assert.equal(mid.shields, 1, `${name}: good play keeps the shield`);
   assert.ok(mid.coins >= 3, `${name}: should have collected coins (got ${mid.coins})`);
   const hudScore = await page.textContent('[data-testid="score"]');
   assert.equal(hudScore.replace(/,/g, ''), String(mid.score), `${name}: HUD shows score`);
 
-  // Now deliberately steer into a FALSE lane.
+  // Now deliberately steer into a FALSE equation.
   for (;;) {
-    const s = await page.evaluate(() => {
+    const st = await page.evaluate(() => {
       const g = window.__rush;
-      const gate = g.gates.filter((x) => !x.resolved).sort((a, b) => a.d - b.d)[0];
-      if (!gate) return { status: g.status };
-      const wrong = [0, 1, 2].find((l) => l !== gate.trueLane);
-      return { status: g.status, wrong, lane: g.player.lane, eta: gate.d / g.speed };
+      const row = g.rows
+        .filter((r) => !r.resolved && r.lanes.some((x) => x.type === 'eq' && !x.eq.isTrue))
+        .sort((a, b) => a.d - b.d)[0];
+      if (!row) return { status: g.status };
+      const wrong = row.lanes.findIndex((x) => x.type === 'eq' && !x.eq.isTrue);
+      const between = g.rows.some((r) => !r.resolved && r.d < row.d);
+      return { status: g.status, wrong, lane: g.player.lane, between };
     });
-    if (s.status !== 'running') break;
-    if (s.wrong != null && s.lane !== s.wrong) await page.keyboard.press(s.wrong < s.lane ? 'ArrowLeft' : 'ArrowRight');
-    if (s.eta != null && s.eta < 0.6 && s.eta > 0.3 && !shot) break;
+    if (st.status !== 'running') break;
+    if (st.wrong != null && !st.between && st.lane !== st.wrong)
+      await page.keyboard.press(st.wrong < st.lane ? 'ArrowLeft' : 'ArrowRight');
+    else if (st.between) await steerKey();
     await page.waitForTimeout(30);
   }
   await page.waitForTimeout(350);
@@ -132,25 +152,24 @@ async function tutorial(name, viewport, isMobile = false) {
   const t0 = Date.now();
   while (!(await page.$('[data-testid="tutorial-done"]'))) {
     assert.ok(Date.now() - t0 < 60000, `${name}: tutorial should finish`);
-    const state = await page.evaluate(() => {
-      const g = window.__rush;
-      const title = document.querySelector('.lesson__title')?.textContent;
-      const gate = g.gates.find((x) => !x.resolved);
-      return { hold: g.hold, title, lane: g.player.lane, trueLane: gate?.trueLane, status: g.status };
-    });
+    const state = await page.evaluate(`(() => {
+      const b = ${BRAIN};
+      return { ...b, title: document.querySelector('.lesson__title')?.textContent };
+    })()`);
     assert.equal(state.status, 'running', `${name}: nobody dies in the tutorial`);
     if (state.title && !seen.has(state.title)) {
       seen.add(state.title);
-      if (state.hold && shots < 3) await page.screenshot({ path: `${OUT}${name}-tutorial-${++shots}.png` });
+      if (state.hold && shots < 8) await page.screenshot({ path: `${OUT}${name}-tutorial-${++shots}.png` });
     }
     if (state.hold) {
       if (state.title === 'Jump!') await page.keyboard.press('ArrowUp');
       else if (state.title === 'Duck!') await page.keyboard.press('ArrowDown');
-      else if (state.trueLane != null) await page.keyboard.press(state.trueLane < state.lane ? 'ArrowLeft' : 'ArrowRight');
+      else if (state.best != null && state.best !== state.lane)
+        await page.keyboard.press(state.best < state.lane ? 'ArrowLeft' : 'ArrowRight');
     }
     await page.waitForTimeout(60);
   }
-  for (const m of ['Steer into the TRUE equation', 'Jump!', 'Duck!', 'You’re ready!']) {
+  for (const m of ['Steer into the TRUE equation', 'Jump!', 'Duck!', 'Walls block the lane — switch!', 'Is 6+7=12 true?', 'You’re ready!']) {
     assert.ok(seen.has(m), `${name}: tutorial showed "${m}" (saw ${[...seen].join(' | ')})`);
   }
   await page.screenshot({ path: `${OUT}${name}-tutorial-done.png` });

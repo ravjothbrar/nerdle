@@ -24,19 +24,69 @@ describe('swipes', () => {
     expect(classifySwipe(5, 5)).toBeNull();
   });
 
-  it('chains two lane changes in one stroke', () => {
+  const rig = () => {
     const el = document.createElement('div');
-    const onAction = vi.fn();
-    attachSwipe(el, onAction);
-    const ev = (type, x, y) => {
+    const calls = [];
+    attachSwipe(el, (a) => calls.push(a));
+    const ev = (type, x, y, id = 1) => {
       const e = new Event(type);
-      Object.assign(e, { clientX: x, clientY: y, pointerId: 1 });
+      Object.assign(e, { clientX: x, clientY: y, pointerId: id });
       el.dispatchEvent(e);
     };
-    ev('pointerdown', 200, 200);
-    ev('pointermove', 170, 200);
-    ev('pointermove', 140, 202);
-    ev('pointerup', 140, 202);
-    expect(onAction.mock.calls.map((c) => c[0])).toEqual(['left', 'left']);
+    return { ev, calls };
+  };
+
+  it('one swipe moves exactly one lane, however long it is', () => {
+    const { ev, calls } = rig();
+    ev('pointerdown', 300, 400);
+    for (let x = 290; x >= 20; x -= 10) ev('pointermove', x, 402); // a long, sweeping swipe
+    ev('pointerup', 20, 402);
+    expect(calls).toEqual(['left']);
+  });
+
+  it('two lanes takes two swipes', () => {
+    const { ev, calls } = rig();
+    for (let i = 0; i < 2; i++) {
+      ev('pointerdown', 200, 400);
+      ev('pointermove', 160, 400);
+      ev('pointerup', 150, 400);
+    }
+    expect(calls).toEqual(['left', 'left']);
+  });
+
+  it('changing direction mid-swipe does not add a second move', () => {
+    const { ev, calls } = rig();
+    ev('pointerdown', 200, 400);
+    ev('pointermove', 240, 400); // right
+    ev('pointermove', 150, 400); // then back left past the start
+    ev('pointermove', 150, 300); // then up
+    ev('pointerup', 150, 300);
+    expect(calls).toEqual(['right']);
+  });
+
+  it('a quick flick that only registers on release still counts', () => {
+    const { ev, calls } = rig();
+    ev('pointerdown', 200, 400);
+    ev('pointerup', 200, 340);
+    expect(calls).toEqual(['jump']);
+  });
+
+  it('a tap does nothing', () => {
+    const { ev, calls } = rig();
+    ev('pointerdown', 200, 400);
+    ev('pointermove', 205, 403);
+    ev('pointerup', 205, 403);
+    expect(calls).toEqual([]);
+  });
+
+  it('two fingers are two independent swipes', () => {
+    const { ev, calls } = rig();
+    ev('pointerdown', 100, 400, 1);
+    ev('pointerdown', 300, 400, 2);
+    ev('pointermove', 60, 400, 1);
+    ev('pointermove', 340, 400, 2);
+    ev('pointerup', 60, 400, 1);
+    ev('pointerup', 340, 400, 2);
+    expect(calls).toEqual(['left', 'right']);
   });
 });

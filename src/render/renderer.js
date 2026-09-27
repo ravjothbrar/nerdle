@@ -16,19 +16,19 @@
 
 import { SPAWN_D, WALL_LEN } from '../game/engine.js';
 import { displayToken } from '../game/equations.js';
-import { createView, scaleAt, groundYAt, laneXAt, project, layoutTokens, CAM, TILE_GAP } from './projection.js';
+import { createView, scaleAt, groundYAt, laneXAt, project, layoutTokens, CAM, TILE_GAP, PANEL_PAD } from './projection.js';
 
 const FONT = '"Nunito", "Quicksand", system-ui, sans-serif';
 // Heights in world units (a lane is 4 wide; the cube is ~2 tall).
-const PANEL_LIFT = 0.35; // equation panels stand on short legs
+const PANEL_LIFT = 0.8; // equation panels stand on legs, clear of whatever is in front
 const HURDLE_LIFT = 0.2;
 const HURDLE_TOP = 1.25;
 // Beams are a tall overhead gantry — big board up high, obvious open gap
 // underneath — but the bottom edge sits below the standing cube's head (~2),
 // above the ducking cube (~0.9): you must duck.
 const BEAM_BOTTOM = 1.6;
-const BEAM_TOP = 3.8;
-const BEAM_POST_TOP = 4.1;
+const BEAM_TOP = 2.75; // slim board: doesn't hide the row behind it
+const BEAM_POST_TOP = 3.05;
 const WALL_H = 2.4; // taller than the cube (~2), low enough not to hide the row behind
 const ROW_LEN = 4.5; // world length of one row of track tiles
 const SEAM_FAR_D = 220; // seams further than this blend into the bed anyway
@@ -102,7 +102,7 @@ export function createRenderer(backCanvas, frontCanvas) {
   /** React to engine events with particles. */
   function onEvents(g, events, theme) {
     const v = view;
-    const midY = v.groundY - v.ppu * 1.3; // roughly the middle of a panel at the runner
+    const midY = v.groundY - v.ppu * 1.6; // roughly the middle of a panel at the runner
     for (const e of events) {
       if (e.type === 'coin') {
         // The panel shatters into its tiles and a coin flies to the HUD.
@@ -446,7 +446,7 @@ export function createRenderer(backCanvas, frontCanvas) {
     const gap = tile * TILE_GAP;
     const rows = layoutTokens(tokens, view.signLayout);
     const align = view.signLayout === 'column' ? 'right' : 'center';
-    const inner = tile * 0.25;
+    const inner = tile * PANEL_PAD;
     const rowW = (r) => r.length * tile + (r.length - 1) * gap;
     const w = Math.max(...rows.map(rowW)) + inner * 2;
     const h = rows.length * tile + (rows.length - 1) * gap + inner * 2;
@@ -482,8 +482,9 @@ export function createRenderer(backCanvas, frontCanvas) {
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = `900 ${tile * 0.7}px ${FONT}`;
-    ctx.lineWidth = Math.max(1, tile * 0.06);
+    // Big, bold digits: they fill most of the tile.
+    ctx.font = `900 ${tile * 0.82}px ${FONT}`;
+    ctx.lineWidth = Math.max(1, tile * 0.05);
     const maxW = w - inner * 2;
     rows.forEach((row, ri) => {
       const y = inner + ri * (tile + gap);
@@ -495,7 +496,7 @@ export function createRenderer(backCanvas, frontCanvas) {
         ctx.strokeStyle = edge;
         ctx.stroke();
         ctx.fillStyle = ink;
-        ctx.fillText(displayToken(ch), x + tile / 2, y + tile * 0.54);
+        ctx.fillText(displayToken(ch), x + tile / 2, y + tile * 0.56);
         x += tile + gap;
       }
     });
@@ -610,7 +611,7 @@ export function createRenderer(backCanvas, frontCanvas) {
     let hUnits;
     let glyphs;
     if (kind === 'hurdle') [cols, rows, wFrac, hUnits, glyphs] = [3, 1, 0.9, HURDLE_TOP - HURDLE_LIFT, ['↑']];
-    else if (kind === 'beam') [cols, rows, wFrac, hUnits, glyphs] = [3, 2, 0.98, BEAM_TOP - BEAM_BOTTOM, ['↓']];
+    else if (kind === 'beam') [cols, rows, wFrac, hUnits, glyphs] = [4, 1, 0.98, BEAM_TOP - BEAM_BOTTOM, ['↓']];
     else {
       const variant = Number(kind.slice(4));
       [cols, rows, wFrac, hUnits] = [3, 4, 0.94, WALL_H];
@@ -632,7 +633,7 @@ export function createRenderer(backCanvas, frontCanvas) {
     // Tiles.
     const padX = w * 0.05;
     const padY = h * (rows === 1 ? 0.1 : 0.04);
-    const bottomBand = kind === 'beam' ? h * 0.16 : 0;
+    const bottomBand = kind === 'beam' ? h * 0.22 : 0;
     const tw = (w - padX * 2) / cols;
     const th = (h - padY * 2 - bottomBand) / rows;
     const t = Math.min(tw, th);
@@ -656,7 +657,7 @@ export function createRenderer(backCanvas, frontCanvas) {
     }
     if (kind === 'beam') {
       // Yellow/black hazard stripes along the underside: "the gap is below".
-      const band = h * 0.16;
+      const band = h * 0.22;
       ctx.save();
       roundRect(ctx, 0, h - band, w, band, band * 0.3);
       ctx.clip();

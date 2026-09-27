@@ -11,9 +11,12 @@
 
 import { MAX_TILES } from '../game/equations.js';
 
-export const CAM = 45;
+// A fairly long lens: far rows stay large enough to read early, which is
+// what buys reading time (without slowing the game down).
+export const CAM = 55;
 export const LANE_UNITS = 4; // world width of a lane
-export const TILE_GAP = 0.08; // gap between tiles, as a fraction of tile size
+export const TILE_GAP = 0.07; // gap between tiles, as a fraction of tile size
+export const PANEL_PAD = 0.16; // panel border around the tiles, as a fraction of tile size
 
 export function createView(width, height) {
   const portrait = height > width * 1.1;
@@ -21,22 +24,23 @@ export function createView(width, height) {
   // Track width at the runner. On phones it's a touch wider than the screen:
   // side lanes are fully visible while you read ahead and only clip at the
   // very last moment, which buys noticeably bigger tiles.
-  const trackW = narrow ? width * 1.25 : Math.min(width * 0.96, height * 1.25, 1150);
+  const trackW = narrow ? width * 1.28 : Math.min(width * 0.97, height * 1.45, 1400);
   const laneW = trackW / 3;
-  const horizonY = height * (portrait ? 0.15 : 0.11);
-  const groundY = height * (portrait ? 0.86 : 0.88);
+  const horizonY = height * (portrait ? 0.12 : 0.08);
+  const groundY = height * (portrait ? 0.87 : 0.9);
   const ppu = laneW / LANE_UNITS; // pixels per world unit at the runner
 
-  // Equation panel layout. Bigger tiles win:
-  //   'row'    7×8=56 on one line (only when there's loads of room)
-  //   'two'    7×8 / =56
+  // Equation panel layout — read left to right wherever the screen allows:
+  //   'row'    7×8=56 on one line (only when even that gives big tiles)
+  //   'two'    7×8 / =56 — laptops and tablets (portrait too)
   //   'column' 7 / ×8 / =56, right-aligned like written column arithmetic —
-  //            what phones get, roughly doubling tile size
-  const signW = laneW * 0.94;
-  const tileFor = (cols) => signW / (cols + (cols - 1) * TILE_GAP + 0.5);
+  //            phones only, where it roughly doubles the digit size compared
+  //            with a horizontal layout in a lane that narrow
+  const signW = laneW * 0.96;
+  const tileFor = (cols) => signW / (cols + (cols - 1) * TILE_GAP + PANEL_PAD * 2);
   let signLayout = 'column';
-  if (tileFor(MAX_TILES) >= 46) signLayout = 'row';
-  else if (tileFor(5) >= 34) signLayout = 'two';
+  if (tileFor(MAX_TILES) >= 56) signLayout = 'row';
+  else if (tileFor(5) >= 36) signLayout = 'two';
 
   return {
     width,

@@ -135,7 +135,7 @@ export default function GameView({
     const adapt = (ms) => {
       if (ms <= 4 || ms > 120) return; // ignore pauses, tab switches, jitter
       avgFrame += (ms - avgFrame) * 0.05;
-      if (avgFrame > 21) {
+      if (avgFrame > 19.5) {
         slowFor += ms;
         fastFor = 0;
         if (slowFor > 1200 && renderer.quality > 0.5) {
@@ -143,10 +143,12 @@ export default function GameView({
           slowFor = 0;
           avgFrame = 16.7;
         }
-      } else if (avgFrame < 17.5 && renderer.quality < 1) {
+      } else if (avgFrame < 17 && renderer.quality < 1) {
         fastFor += ms;
         slowFor = 0;
-        if (fastFor > 8000) {
+        // Step back up only after a long calm stretch, so quality doesn't
+        // flip-flop on a device that's right on the edge.
+        if (fastFor > 15000) {
           renderer.setQuality(renderer.quality + 0.1);
           fastFor = 0;
         }

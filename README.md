@@ -27,7 +27,7 @@ npm run dev        # http://localhost:5173
 
 | | Keyboard | Touch |
 |---|---|---|
-| Change lane | ← → or A D | swipe left / right |
+| Change lane | ← → or A D | swipe left / right (one swipe = one lane) |
 | Jump (barriers) | ↑, W or Space | swipe up |
 | Duck (beams) | ↓ or S | swipe down |
 | Pause | P or Esc | ⏸ button |
@@ -60,7 +60,19 @@ Every row always has at least one lane you can get through cleanly. A test plays
 
 **Exactly one of three is true in a maths row, and there's no shortcut.** Each equation is generated independently; one is left true and the others are perturbed. If the decoys were built from the true equation (7×8=56 / 7×8=54 / 7+8=56), you could find the answer without doing any maths — pick the lane that shares the most with the other two. With independent lanes every panel is an honest true-or-false check. (There's a test for this.)
 
-**Big, readable maths.** The camera sits high and looks down the track, like Subway Surfers: the horizon is near the top of the screen and rows spread down its full height, so you can read two or three rows ahead. On laptops, panels show the equation in two lines (`12+39` / `=51`). On phones they switch to right-aligned column arithmetic (`12` / `+39` / `=51`), which roughly doubles the tile size. Tile size is uniform from row to row, so a near panel never hides the one behind it.
+**Big, readable maths — and time to read it.** The camera sits high and looks down the track, like Subway Surfers: the horizon is near the top of the screen and rows spread down its full height, so you can read two or three rows ahead. A long lens keeps far rows large, so an equation becomes legible well before it reaches you. That buys reading time without slowing the game down.
+
+- **Laptops and tablets** (including tablets in portrait) read left to right, in two lines (`12+39` / `=51`).
+- **Phones** use right-aligned column arithmetic (`12` / `+39` / `=51`). In a lane that narrow, a horizontal layout would roughly halve the digit size.
+- Tile size is uniform from row to row, so a near panel never hides the one behind it.
+
+| | Digit height at the runner | Time an equation is legible (12px digits) before it reaches you, at the start |
+|---|---|---|
+| Phone 390×844 | 21px → **27px** | 2.0s → **4.1s** |
+| Laptop 1280×800 | 27px → **39px** | 3.3s → **5.9s** (legible from the horizon) |
+| iPad portrait | 21px → **27px** | 2.1s → **4.0s** |
+
+**Controls on phones.** One swipe moves exactly one lane, however long or fast the swipe; to move two lanes, swipe twice. The swipe registers the moment your finger crosses the threshold, and a quick flick that only registers on release still counts.
 
 **Decoys are believable, and get sneakier as your score climbs.** Decoy sharpness is driven by *whichever is further along — time survived or correct answers* — so a strong player hits the hard stuff quickly:
 
@@ -112,13 +124,15 @@ If frames still run long, adaptive quality lowers the resolution a notch, keepin
 | Profile | Before optimisation | Now |
 |---|---|---|
 | Laptop 1440×900 @2x | 31 fps | **60 fps** |
-| Phone 390×844 @3x, CPU throttled 4× | 17 fps | **57–60 fps** |
-| Phone 390×844 @3x, CPU throttled 6× | 12 fps | **57 fps** |
+| Phone 390×844 @3x, CPU throttled 4× | 17 fps | **55–60 fps** |
+| Phone 390×844 @3x, CPU throttled 6× | 12 fps | **50–56 fps** |
+
+These runs are noisy in a GPU-less container. Profiling shows over 80% of the time goes to software canvas rasterisation, which real phones do on the GPU; the game's own JavaScript is under 10% of the frame.
 
 ## Tests
 
 ```bash
-npm test           # 80 unit + component tests (Vitest)
+npm test           # 85 unit + component tests (Vitest)
 npm run build && npm run e2e    # real Chromium: tutorial, runs, caught-out screens
 npm run build && npm run perf   # frame-rate benchmark
 ```
@@ -140,6 +154,7 @@ The unit tests check things like:
 - a perfect autopilot survives 3 minutes on 12 seeds, so every run is fair
 - same seed gives the same run
 - the tutorial can't be failed, even by random mashing
+- one swipe is exactly one lane: long swipes, direction changes, quick flicks, taps, two fingers
 - share-card text
 
 The e2e test plays with real key presses, deliberately steers into a false lane, and checks the "it's actually…" value is arithmetically correct.

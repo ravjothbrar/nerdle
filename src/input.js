@@ -30,34 +30,39 @@ export function classifySwipe(dx, dy, threshold = 22) {
 }
 
 /**
- * Attach swipe handling to an element. One stroke can chain moves
- * (swipe left-left across two lanes) because the origin resets after each
- * recognised gesture.
+ * Attach swipe handling to an element. Exactly ONE action per touch: a long
+ * or fast swipe still only moves one lane — lift and swipe again to move two.
+ * It fires as soon as the finger crosses the threshold (no waiting for
+ * touchend), and a very quick flick that only registers on release still
+ * counts. Each finger is tracked separately.
  */
 export function attachSwipe(el, onAction) {
-  let origin = null;
+  const strokes = new Map(); // pointerId -> { x, y, fired }
   const down = (e) => {
-    origin = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    strokes.set(e.pointerId, { x: e.clientX, y: e.clientY, fired: false });
   };
-  const move = (e) => {
-    if (!origin || e.pointerId !== origin.id) return;
-    const action = classifySwipe(e.clientX - origin.x, e.clientY - origin.y);
+  const check = (e) => {
+    const s = strokes.get(e.pointerId);
+    if (!s || s.fired) return;
+    const action = classifySwipe(e.clientX - s.x, e.clientY - s.y);
     if (action) {
+      s.fired = true;
       onAction(action);
-      origin = { x: e.clientX, y: e.clientY, id: e.pointerId };
     }
   };
-  const up = () => {
-    origin = null;
+  const up = (e) => {
+    check(e);
+    strokes.delete(e.pointerId);
   };
+  const cancel = (e) => strokes.delete(e.pointerId);
   el.addEventListener('pointerdown', down);
-  el.addEventListener('pointermove', move);
+  el.addEventListener('pointermove', check);
   el.addEventListener('pointerup', up);
-  el.addEventListener('pointercancel', up);
+  el.addEventListener('pointercancel', cancel);
   return () => {
     el.removeEventListener('pointerdown', down);
-    el.removeEventListener('pointermove', move);
+    el.removeEventListener('pointermove', check);
     el.removeEventListener('pointerup', up);
-    el.removeEventListener('pointercancel', up);
+    el.removeEventListener('pointercancel', cancel);
   };
 }

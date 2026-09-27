@@ -23,7 +23,7 @@
 
 import { generateGate } from './equations.js';
 
-export const WALL_LEN = 7; // world units a wall extends along the track
+export const WALL_LEN = 5; // world units a wall extends along the track
 
 /** Seconds into a run before anything but maths rows can appear. */
 export const MIXED_FROM = 8;

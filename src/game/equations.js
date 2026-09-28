@@ -60,24 +60,24 @@ export const displayToken = (ch) => (ch === '-' ? '−' : ch);
 export const displayText = (text) => [...text].map(displayToken).join('');
 
 /** A random TRUE equation using one of the operators in `ops`. */
-export function randomTrueEquation(rng, t, ops = operatorsAt(t)) {
-  const r = operandRangesAt(t);
+export function randomTrueEquation(rng, t, ops = operatorsAt(t), level) {
+  const r = operandRangesAt(t, level);
   for (;;) {
     const op = rng.pick(ops);
     let a;
     let b;
     switch (op) {
       case '+':
-        a = rng.int(1, r.add.max);
-        b = rng.int(1, r.add.max);
+        a = rng.int(r.add.min, r.add.max);
+        b = rng.int(r.add.min, r.add.max);
         break;
       case '-':
-        a = rng.int(2, r.sub.max);
-        b = rng.int(1, a - 1);
+        a = rng.int(Math.max(r.sub.aMin, r.sub.bMin + 1), r.sub.max);
+        b = rng.int(r.sub.bMin, a - 1);
         break;
       case '×':
-        a = rng.int(2, r.mul.aMax);
-        b = rng.int(2, r.mul.bMax);
+        a = rng.int(r.mul.min, r.mul.aMax);
+        b = rng.int(r.mul.min, r.mul.bMax);
         if (rng.chance(0.5)) [a, b] = [b, a];
         break;
       case '÷': {
@@ -107,13 +107,13 @@ const digits = (n) => String(n).length;
  *  - 'swap'  : operator swapped, result kept — 9+3=6 (that's 9−3)
  * Returns null if no valid decoy exists for this base (caller retries).
  */
-export function makeDecoy(rng, base, p, ops = ['+', '-', '×', '÷']) {
+export function makeDecoy(rng, base, p, ops = ['+', '-', '×', '÷'], opts = {}) {
   const order = [];
   if (rng.chance(classicSlipChance(p))) order.push(slipDecoy);
   if (rng.chance(operatorSwapChance(p))) order.push(swapDecoy);
   order.push(offsetDecoy, swapDecoy);
   for (const strategy of order) {
-    const d = strategy(rng, base, p, ops);
+    const d = strategy(rng, base, p, ops, opts);
     if (d && !d.isTrue && d.result >= 0 && d.tokens.length <= MAX_TILES) return d;
   }
   return null;
@@ -149,10 +149,16 @@ function slipDecoy(rng, base) {
   return eq;
 }
 
-function swapDecoy(rng, base, _p, ops) {
+const family = (op) => (op === '+' || op === '-' ? 'add' : 'mul');
+
+function swapDecoy(rng, base, _p, ops, opts = {}) {
   const options = ops.filter((op) => {
     if (op === base.op) return false;
+    // Easy level only swaps within a family (+ ↔ −), so a swap never drags
+    // numbers into times tables the level doesn't use.
+    if (opts.sameFamilySwaps && family(op) !== family(base.op)) return false;
     const v = evaluate(base.a, op, base.b);
+    if (opts.maxValue != null && v > opts.maxValue) return false;
     // The "it's actually…" value must be a clean non-negative integer, and
     // the lie must be believable: 29×8=21 fools nobody.
     if (!Number.isInteger(v) || v < 0 || v === base.actual) return false;
@@ -169,17 +175,17 @@ function swapDecoy(rng, base, _p, ops) {
  * which operators and operand sizes appear; `p` (0..1) how sharp the decoys
  * are. Returns { lanes: [eq, eq, eq], trueLane }.
  */
-export function generateGate(rng, t, p = decoyProgress(t)) {
-  const ops = operatorsAt(t);
-  const truth = randomTrueEquation(rng, t, ops);
+export function generateGate(rng, t, p = decoyProgress(t), level) {
+  const ops = operatorsAt(t, level);
+  const truth = randomTrueEquation(rng, t, ops, level);
   const texts = new Set([truth.text]);
   const decoys = [];
 
   let attempts = 0;
   while (decoys.length < 2) {
     attempts++;
-    const base = randomTrueEquation(rng, t, ops);
-    const decoy = makeDecoy(rng, base, p, ops);
+    const base = randomTrueEquation(rng, t, ops, level);
+    const decoy = makeDecoy(rng, base, p, ops, level === 'easy' ? { sameFamilySwaps: true, maxValue: 20 } : {});
     if (!decoy || texts.has(decoy.text)) continue;
     // Match tile length with the true equation so length is not a tell.
     // After many attempts accept ±1 tile, then anything (never observed in

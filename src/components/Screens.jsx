@@ -3,6 +3,7 @@ import Mascot from './Mascot.jsx';
 import { TileRow, HistoryGrid } from './Tiles.jsx';
 import { explain, displayText } from '../game/equations.js';
 import { shareText, dailyNumber } from '../game/share.js';
+import { LEVELS, LEVEL_IDS } from '../game/difficulty.js';
 
 // ------------------------------------------------------------------ header
 
@@ -74,7 +75,20 @@ export function LogoCube({ size = 34 }) {
 
 // ------------------------------------------------------------------ start
 
-export function StartScreen({ onPlay, mode, onMode, best, dailyBest, theme, onToggleTheme, onRules, onTutorial, firstTime }) {
+export function StartScreen({
+  onPlay,
+  mode,
+  onMode,
+  level = 'medium',
+  onLevel,
+  best,
+  dailyBest,
+  theme,
+  onToggleTheme,
+  onRules,
+  onTutorial,
+  firstTime,
+}) {
   const playRef = useRef(null);
   useEffect(() => playRef.current?.focus({ preventScroll: true }), []);
   return (
@@ -102,6 +116,8 @@ export function StartScreen({ onPlay, mode, onMode, best, dailyBest, theme, onTo
             <TileRow text="9-3=5" size="sm" />
           </div>
         </div>
+
+        <LevelPicker level={level} onLevel={onLevel} />
 
         <div className="mode" role="radiogroup" aria-label="Game mode">
           <button role="radio" aria-checked={mode === 'endless'} className={`mode__opt ${mode === 'endless' ? 'mode__opt--on' : ''}`} onClick={() => onMode('endless')}>
@@ -136,6 +152,35 @@ export function StartScreen({ onPlay, mode, onMode, best, dailyBest, theme, onTo
             </label>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** Easy / Medium / Hard — how hard the sums are. */
+export function LevelPicker({ level, onLevel }) {
+  const L = LEVELS[level];
+  return (
+    <div className="level">
+      <div className="level__head">
+        <span className="level__label">Sums</span>
+        <div className="level__seg" role="radiogroup" aria-label="How hard the sums are">
+          {LEVEL_IDS.map((id) => (
+            <button
+              key={id}
+              role="radio"
+              aria-checked={level === id}
+              className={`level__opt level__opt--${id} ${level === id ? 'level__opt--on' : ''}`}
+              onClick={() => onLevel?.(id)}
+              data-testid={`level-${id}`}
+            >
+              {LEVELS[id].label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="level__info" aria-live="polite">
+        <TileRow text={L.example} size="xs" state="correct" /> <span>{L.blurb}</span>
       </div>
     </div>
   );
@@ -200,6 +245,11 @@ export function RulesModal({ onClose, onTutorial }) {
           <li>
             <b>Build a streak.</b> Every 5 true lanes in a row raises your multiplier (up to ×5). Each coin is
             worth 10 × multiplier.
+          </li>
+          <li>
+            <b>Pick how hard the sums are.</b> <i>Easy</i>: + and − within 20, small times tables. <i>Medium</i>:
+            the standard game. <i>Hard</i>: two-digit sums from the start, full tables, sneaky decoys. Only the
+            maths changes — the speed is the same.
           </li>
           <li>
             <b>It gets faster — and sneakier.</b> + and − to start, × arrives at 20s, ÷ at 45s. Decoys start
@@ -308,13 +358,22 @@ export function GameOver({ summary, best, isNewBest, mode, onAgain, onMenu }) {
           <Stat label="time" value={`${summary.time.toFixed(1)}s`} />
         </div>
         <div className="best">
-          {isNewBest ? <span className="best__new">★ New best!</span> : <span>Best {best.toLocaleString('en-US')}</span>}
+          {isNewBest ? (
+            <span className="best__new">★ New {summary.level ? `${LEVELS[summary.level]?.label} ` : ''}best!</span>
+          ) : (
+            <span>
+              {summary.level ? `${LEVELS[summary.level]?.label} best` : 'Best'} {best.toLocaleString('en-US')}
+            </span>
+          )}
         </div>
 
         <div className="sharecard">
           <div className="sharecard__head">
             <LogoCube size={22} />
             <span>{mode === 'daily' ? `Nerdle Rush Daily #${dailyNumber()}` : 'Nerdle Rush'}</span>
+            {summary.level && (
+              <span className={`level-chip level-chip--${summary.level}`}>{LEVELS[summary.level]?.label}</span>
+            )}
           </div>
           <HistoryGrid history={summary.history} />
           <div className="sharecard__line">

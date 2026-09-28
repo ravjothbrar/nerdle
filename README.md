@@ -85,6 +85,14 @@ Every row always has at least one lane you can get through cleanly. A test plays
 
 Decoys keep the same tile count as the true equation wherever possible, so length is never a tell. Equations never exceed **8 tiles** — the length of a classic Nerdle row.
 
+**Three maths levels.** Pick how hard the sums are on the start screen; your choice is remembered. Only the arithmetic changes: speed, obstacles and scoring are identical, so every level is the same game. Best scores are kept per level, and the level is shown on the game-over screen and the share card ("Nerdle Rush · Hard").
+
+| Level | Sums | Decoys |
+|---|---|---|
+| **Easy** | + and − within 20; × up to 5×5 from 25s; no ÷ (`3+5=8`, `2×4=8`) | always obviously wrong (2+ off); swaps stay within + / − |
+| **Medium** | the standard game: up to 99, × at 20s, ÷ at 45s, tables to 12 (`42−26=16`, `8×9=72`) | sharpen as your score climbs |
+| **Hard** | two-digit sums from the first row, × at 8s, ÷ at 20s, full tables (`85−53=32`, `28÷7=4`) | sharp from the start: near-misses, forgotten carries, swaps (`4+9=36`) |
+
 **Difficulty ramp**
 
 | When | What changes |
@@ -132,7 +140,7 @@ These runs are noisy in a GPU-less container. Profiling shows over 80% of the ti
 ## Tests
 
 ```bash
-npm test           # 85 unit + component tests (Vitest)
+npm test           # 98 unit + component tests (Vitest)
 npm run build && npm run e2e    # real Chromium: tutorial, runs, caught-out screens
 npm run build && npm run perf   # frame-rate benchmark
 ```
@@ -142,7 +150,7 @@ The unit tests check things like:
 - no negatives, fractions or more than 8 tiles
 - lane lengths match; the true lane's position is uniform
 - no "odd one out" shortcut
-- ×/÷ unlock at 20s/45s
+- ×/÷ unlock at the right time on each level; easy never shows ÷ or sums above 20; hard is two-digit from the first row; numbers grow easy → medium → hard; only the sums differ between levels
 - decoy margins and kinds at each sharpness level; sharp decoys are mostly close cuts
 - no absurd operator swaps
 - every generated row has a survivable lane, never three walls, and maths stays the majority

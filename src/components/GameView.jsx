@@ -18,6 +18,7 @@ const FIXED_DT = 1 / 120;
 export default function GameView({
   mode, // 'play' | 'tutorial' | 'attract'
   seed,
+  level, // maths level: 'easy' | 'medium' | 'hard'
   theme,
   audio,
   paused,
@@ -94,7 +95,7 @@ export default function GameView({
 
   // The game loop.
   useEffect(() => {
-    const g = createGame({ seed, firstGateDelay: attract ? 0.2 : 0.35, scripted: tutorialMode });
+    const g = createGame({ seed, level, firstGateDelay: attract ? 0.2 : 0.35, scripted: tutorialMode });
     const tutorial = tutorialMode ? createTutorial() : null;
     let lastLesson = null;
     let tutorialSent = false;
@@ -237,7 +238,7 @@ export default function GameView({
       }
       if (attract && g.status === 'over') {
         // Attract mode loops forever: quietly start a fresh run.
-        Object.assign(g, createGame({ seed: Math.random() * 1e9, firstGateDelay: 0.2 }));
+        Object.assign(g, createGame({ seed: Math.random() * 1e9, level, firstGateDelay: 0.2 }));
         renderer.reset();
       }
       renderer.draw(g, themeRef.current, dt);
@@ -304,7 +305,7 @@ export default function GameView({
     };
     // A new seed means a new run; everything else is read through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seed, attract, tutorialMode]);
+  }, [seed, level, attract, tutorialMode]);
 
   const running = mascotMood === 'run' && !paused;
   return (

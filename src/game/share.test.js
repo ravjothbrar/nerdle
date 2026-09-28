@@ -40,6 +40,12 @@ describe('share card', () => {
     );
   });
 
+  it('names the maths level', () => {
+    const summary = { score: 10, distance: 5, coins: 1, bestStreak: 1, history: ['correct'], level: 'hard' };
+    expect(shareText(summary).split('\n')[0]).toBe('Nerdle Rush · Hard 🏃');
+    expect(shareText(summary, { mode: 'daily', date: '2026-09-27' }).split('\n')[0]).toBe('Nerdle Rush Daily #1 · Hard 🏃');
+  });
+
   it('numbers daily runs from launch day', () => {
     expect(dailyNumber('2026-09-27')).toBe(1);
     expect(dailyNumber('2027-09-27')).toBe(366);

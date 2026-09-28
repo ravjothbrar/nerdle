@@ -42,7 +42,7 @@ const slot = (type) => ({ type });
  * used to keep maths rows the majority: never more than two non-maths rows in
  * a row.
  */
-export function generateRow(rng, t, p, recent = []) {
+export function generateRow(rng, t, p, recent = [], level) {
   const nonMathsStreak = countTrailing(recent, (k) => k !== 'maths');
   let kind = 'maths';
   if (t >= MIXED_FROM && nonMathsStreak < 2) {
@@ -51,14 +51,14 @@ export function generateRow(rng, t, p, recent = []) {
     else if (r < 0.45) kind = 'obstacles';
   }
   if (kind === 'maths') {
-    return { kind, lanes: generateGate(rng, t, p).lanes.map(eqSlot) };
+    return { kind, lanes: generateGate(rng, t, p, level).lanes.map(eqSlot) };
   }
-  if (kind === 'mixed') return { kind, lanes: mixedLanes(rng, t, p) };
+  if (kind === 'mixed') return { kind, lanes: mixedLanes(rng, t, p, level) };
   return { kind, lanes: obstacleLanes(rng, t) };
 }
 
-function mixedLanes(rng, t, p) {
-  const { lanes, trueLane } = generateGate(rng, t, p);
+function mixedLanes(rng, t, p, level) {
+  const { lanes, trueLane } = generateGate(rng, t, p, level);
   const truth = lanes[trueLane];
   const decoy = lanes[(trueLane + 1) % 3];
   if (rng.chance(0.5)) {

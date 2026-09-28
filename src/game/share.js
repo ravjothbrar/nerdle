@@ -36,9 +36,11 @@ export function historyRows(history) {
   return lead ? [lead, ...rows] : rows;
 }
 
+const LEVEL_NAMES = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
+
 export function shareText(summary, { mode = 'endless', url = '', date = todayKey() } = {}) {
-  const title =
-    mode === 'daily' ? `Nerdle Rush Daily #${dailyNumber(date)}` : 'Nerdle Rush';
+  const base = mode === 'daily' ? `Nerdle Rush Daily #${dailyNumber(date)}` : 'Nerdle Rush';
+  const title = summary.level ? `${base} · ${LEVEL_NAMES[summary.level] ?? summary.level}` : base;
   const lines = [
     `${title} 🏃`,
     `${summary.score.toLocaleString('en-US')} pts · ${summary.distance}m · ${summary.coins} ✓ · best streak ${summary.bestStreak}`,
